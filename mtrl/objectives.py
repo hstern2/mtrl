@@ -8,9 +8,9 @@ from trl.objectives.base import Objectives
 
 
 def build() -> Objectives:
-    """Build the default molecular objectives suite.
+    """Build the default molecular objectives.
 
-    Called by: trl rl ... --objectives mtrl.suite:build
+    Called by: trl rl ... --objectives mtrl.objectives:build
     """
     return Objectives(
         objectives=[

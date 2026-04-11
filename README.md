@@ -29,7 +29,7 @@ torchrun --nproc_per_node=4 -m trl pretrain corpus.jsonl \
 
 # 3. RL fine-tune with molecular objectives
 torchrun --nproc_per_node=4 -m trl rl checkpoints/best.pt corpus.jsonl \
-    --vocab vocab.json --objectives mtrl.suite:build
+    --vocab vocab.json --objectives mtrl.objectives:build
 
 # 4. Evaluate
 mtrl evaluate checkpoints_rl/rl_final.pt --vocab vocab.json --n 5000
@@ -37,7 +37,7 @@ mtrl evaluate checkpoints_rl/rl_final.pt --vocab vocab.json --n 5000
 
 ## Objectives
 
-The default suite (`mtrl.suite:build`) includes:
+The default suite (`mtrl.objectives:build`) includes:
 
 | Objective | Direction | Description |
 |-----------|-----------|-------------|
@@ -54,5 +54,5 @@ mtrl/
   data/        AMSR detokenize bridge, SDF/SMILES corpus preparation
   objectives/  SA score, QED, drug-likeness filters, docking stub
   evaluation/  validity/uniqueness/novelty, Pareto analysis, conformational checks
-  suite.py     objectives factory for trl RL
+  objectives.py  objectives factory for trl RL
 ```
