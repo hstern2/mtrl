@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mtrl"
+version = "0.1.0"
+description = "Molecular generation with AMSR"
+authors = [{ name = "Harry Stern" }]
+license = { file = "LICENSE" }
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "trl>=0.1.0",
+    "amsr>=0.1.0",
+    "rdkit",
+    "typer[all]>=0.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "pytest-xdist>=3",
+    "pre-commit>=4",
+    "ruff>=0.9",
+    "mypy>=1.14",
+]
+
+[project.scripts]
+mtrl = "mtrl.cli:app"
+
+[tool.setuptools]
+packages = { find = { include = ["mtrl", "mtrl.*"] } }
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+lint.select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mtrl"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["mtrl"]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+pretty = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["gpu: requires GPU"]
