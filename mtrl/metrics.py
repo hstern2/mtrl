@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from rdkit.Chem import MolToSmiles
 
-from mtrl.data.amsr_wrapper import detokenize
+from mtrl import detokenize
 
 
 def validity_rate(token_sequences: list[list[str]]) -> float:
-    """Fraction of token sequences that decode to valid molecules."""
     if not token_sequences:
         return 0.0
     valid = sum(1 for seq in token_sequences if detokenize(seq) is not None)
@@ -14,7 +13,6 @@ def validity_rate(token_sequences: list[list[str]]) -> float:
 
 
 def uniqueness_rate(token_sequences: list[list[str]]) -> float:
-    """Fraction of unique canonical SMILES among valid molecules."""
     smiles_set: set[str] = set()
     valid_count = 0
     for seq in token_sequences:
@@ -33,7 +31,6 @@ def novelty_rate(
     token_sequences: list[list[str]],
     training_smiles: set[str],
 ) -> float:
-    """Fraction of valid unique molecules not in the training set."""
     novel = 0
     total_unique = 0
     for seq in token_sequences:

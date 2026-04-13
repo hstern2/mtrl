@@ -4,34 +4,33 @@ Molecular generation with [AMSR](https://github.com/hstern2/amsr) token sequence
 
 ## How it works
 
-1. **Tokenize** molecular structures (SDF, SMILES) into AMSR token sequences with data augmentation (randomized atom ordering).
-2. **Pretrain** a transformer on AMSR token sequences using trl.
-3. **RL fine-tune** with molecular objectives (synthetic accessibility, QED, drug-likeness filters) via Pareto-ranked REINFORCE.
-4. **Evaluate** generated molecules for validity, uniqueness, novelty, and multi-objective Pareto analysis.
+1. **Pretrain** a transformer on AMSR token sequences (JSONL corpus) using trl.
+2. **RL fine-tune** with molecular objectives (synthetic accessibility, QED, drug-likeness filters) via Pareto-ranked REINFORCE.
+3. **Evaluate** generated molecules for validity, uniqueness, and novelty.
+
+Corpus preparation (tokenizing SDF/SMILES into AMSR JSONL) lives in the [amsr](https://github.com/hstern2/amsr) repo.
 
 ## Installation
 
+`trl` and `amsr` are pulled from GitHub via `tool.uv.sources` in `pyproject.toml`.
+
 ```bash
-# Install trl and amsr as editable dependencies
-uv pip install -e ../trl -e ../amsr -e ".[dev]"
+uv sync
 ```
 
 ## Usage
 
 ```bash
-# 1. Tokenize structures to JSONL
-mtrl prepare ./raw_structures/ --output corpus.jsonl --augmentations 10
-
-# 2. Build vocab + pretrain (via trl)
+# 1. Build vocab + pretrain (assumes corpus.jsonl already exists)
 trl build-vocab corpus.jsonl --output vocab.json
 torchrun --nproc_per_node=4 -m trl pretrain corpus.jsonl \
     --vocab vocab.json --epochs 10
 
-# 3. RL fine-tune with molecular objectives
+# 2. RL fine-tune with molecular objectives
 torchrun --nproc_per_node=4 -m trl rl checkpoints/best.pt corpus.jsonl \
     --vocab vocab.json --objectives mtrl.objectives:build
 
-# 4. Evaluate
+# 3. Evaluate
 mtrl evaluate checkpoints_rl/rl_final.pt --vocab vocab.json --n 5000
 ```
 
@@ -45,14 +44,12 @@ The default suite (`mtrl.objectives:build`) includes:
 | QED       | maximize  | Quantitative estimate of drug-likeness |
 | Drug-likeness filter | reject | MW, logP, HBD/HBA, PAINS |
 
-Stubs for docking and neural affinity scoring are included for future use.
-
 ## Structure
 
 ```
 mtrl/
-  data/        AMSR detokenize bridge, SDF/SMILES corpus preparation
-  objectives/  SA score, QED, drug-likeness filters, docking stub
-  evaluation/  validity/uniqueness/novelty, Pareto analysis, conformational checks
-  objectives.py  objectives factory for trl RL
+  __init__.py    detokenize bridge (AMSR tokens -> RDKit Mol)
+  cli.py         `mtrl evaluate` command
+  objectives.py  QED, SA score, drug-likeness filter, build() factory for trl RL
+  metrics.py     validity / uniqueness / novelty
 ```

@@ -11,10 +11,11 @@ license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "torch>=2.4,<3",
     "trl>=0.1.0",
     "amsr>=0.1.0",
     "rdkit",
-    "typer[all]>=0.9",
+    "typer>=0.9",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,24 @@ mtrl = "mtrl.cli:app"
 
 [tool.setuptools]
 packages = { find = { include = ["mtrl", "mtrl.*"] } }
+
+[tool.uv]
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+[tool.uv.sources]
+trl = { git = "https://github.com/hstern2/trl", branch = "main" }
+amsr = { git = "https://github.com/hstern2/amsr", branch = "main" }
+torch = [
+    { index = "pytorch-cu121", marker = "sys_platform != 'darwin'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
 
 [tool.ruff]
 target-version = "py311"
