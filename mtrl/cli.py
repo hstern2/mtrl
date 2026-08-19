@@ -30,8 +30,20 @@ def generate(
         help="Parallel CPU conformer workers",
     ),
     temperature: float = typer.Option(0.8),
-    top_k: int = typer.Option(0, help="Top-k sampling; 0 disables it"),
-    top_p: float = typer.Option(1.0, help="Nucleus sampling threshold"),
+    top_k: int = typer.Option(
+        0,
+        help=(
+            "At each token, sample only from the K most probable choices; "
+            "0 considers the full vocabulary"
+        ),
+    ),
+    top_p: float = typer.Option(
+        1.0,
+        help=(
+            "At each token, sample from the smallest set whose cumulative "
+            "probability reaches P; 1.0 considers the full vocabulary"
+        ),
+    ),
     seed: int = typer.Option(0),
     device: str = typer.Option("auto", help="auto, cpu, cuda, or a CUDA device such as cuda:0"),
 ) -> None:

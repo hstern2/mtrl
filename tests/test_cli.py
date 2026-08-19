@@ -15,6 +15,9 @@ def test_short_help_option() -> None:
     assert generate_help.exit_code == 0
     assert f"[default: {_CLI_BATCH_SIZE}]" in generate_help.stdout
     assert f"[default: {_CLI_CONFORMER_WORKERS}]" in generate_help.stdout
+    assert "most probable choices" in generate_help.stdout
+    assert "cumulative" in generate_help.stdout
+    assert "probability reaches P" in generate_help.stdout
 
 
 def test_generate_writes_only_sdf_to_stdout(tmp_path, monkeypatch) -> None:
