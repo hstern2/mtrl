@@ -1,82 +1,168 @@
 from __future__ import annotations
 
+import json
+import os
+from collections.abc import Callable
 from typing import Any
 
-from rdkit.Chem import QED as QEDModule
-from rdkit.Chem import Descriptors, FilterCatalog, Mol
-from rdkit.Contrib.SA_Score import sascorer
-from trl.objectives.base import Objective, Objectives
+import numpy as np
+from rdkit import Chem
+from rdkit.Chem import Mol
+from trl.objectives.base import Objective, Objectives, ScoredItem
 
-from mtrl import detokenize
+from mtrl import DecodedAMSR, decode_amsr, make_conformer
+from mtrl.config import ScoringConfig
+from mtrl.lilly import LillyMedchemFilter
+from mtrl.scoring import StructureScore, StructureScoringPipeline
 
 
-class QEDObjective(Objective):
-    """Quantitative Estimate of Drug-likeness (higher is more drug-like)."""
-
-    def __init__(self, name: str = "qed", direction: str = "maximize") -> None:
-        super().__init__(name=name, direction=direction)
+class CNNaffinityObjective(Objective):
+    def __init__(self) -> None:
+        super().__init__(name="gnina_cnn_affinity", direction="maximize")
 
     def score_batch(self, items: list[Any]) -> list[float]:
-        return [QEDModule.qed(m) if isinstance(m, Mol) else 0.0 for m in items]
+        return [float(item.cnn_affinity) for item in items]
 
 
-class SAScoreObjective(Objective):
-    """Synthetic Accessibility score (lower is easier to synthesize)."""
+class RoshamboComboObjective(Objective):
+    def __init__(self) -> None:
+        super().__init__(name="roshambo_tanimoto_combo", direction="maximize")
+
+    def score_batch(self, items: list[Any]) -> list[float]:
+        return [float(item.roshambo_tanimoto_combo) for item in items]
+
+
+class DockingObjectives(Objectives):
+    """Two-objective Pareto suite with topology and structure hard gates."""
 
     def __init__(
         self,
-        name: str = "sa",
-        direction: str = "minimize",
-        reject_above: float | None = 6.0,
+        config: ScoringConfig,
+        *,
+        decode_fn: Callable[[list[str]], DecodedAMSR | None] = decode_amsr,
+        conformer_fn: Callable[[DecodedAMSR], Mol | None] = make_conformer,
+        pipeline: StructureScoringPipeline | None = None,
+        lilly_filter: LillyMedchemFilter | None = None,
     ) -> None:
-        super().__init__(name=name, direction=direction, reject_above=reject_above)
+        super().__init__(
+            objectives=[CNNaffinityObjective(), RoshamboComboObjective()],
+            decode_fn=decode_fn,
+        )
+        self.config = config
+        self.evaluation_number = 0
+        self.rank = int(os.environ.get("RANK", "0"))
+        self.score_log = config.work_dir / f"rank_{self.rank}" / "scores.jsonl"
+        if config.record_scores:
+            self.score_log.parent.mkdir(parents=True, exist_ok=True)
+        self.conformer_fn = conformer_fn
+        self.pipeline = pipeline or StructureScoringPipeline(config)
+        self.lilly_filter = lilly_filter
+        if config.lilly_medchem_rules and self.lilly_filter is None:
+            self.lilly_filter = LillyMedchemFilter(config.lilly_rules_executable)
 
-    def score_batch(self, items: list[Any]) -> list[float]:
-        return [sascorer.calculateScore(m) if isinstance(m, Mol) else 10.0 for m in items]
+    def evaluate(self, token_sequences: list[list[str]]) -> list[ScoredItem]:
+        decoded = [self.decode_fn(sequence) for sequence in token_sequences]
+        items = [ScoredItem(token_ids=[]) for _ in decoded]
+        diagnostics: list[StructureScore | None] = [None] * len(decoded)
+
+        candidate_indices = []
+        candidate_decoded = []
+        for index, candidate in enumerate(decoded):
+            if candidate is None:
+                items[index].valid = False
+                items[index].rejection_reason = "AMSR decode failed"
+                continue
+            if len(Chem.GetMolFrags(candidate.mol)) != 1:
+                items[index].valid = False
+                items[index].rejection_reason = "molecule is disconnected"
+                continue
+            candidate_indices.append(index)
+            candidate_decoded.append(candidate)
+
+        if self.lilly_filter is not None and candidate_decoded:
+            accepted = self.lilly_filter.accept_batch(
+                [candidate.mol for candidate in candidate_decoded]
+            )
+            retained_indices = []
+            retained_decoded = []
+            for index, candidate, passed in zip(
+                candidate_indices, candidate_decoded, accepted, strict=True
+            ):
+                if passed:
+                    retained_indices.append(index)
+                    retained_decoded.append(candidate)
+                else:
+                    items[index].valid = False
+                    items[index].rejection_reason = "Lilly Medchem Rules (-relaxed) failed"
+            candidate_indices = retained_indices
+            candidate_decoded = retained_decoded
+
+        conformer_indices = []
+        candidate_mols = []
+        for index, candidate in zip(candidate_indices, candidate_decoded, strict=True):
+            conformer = self.conformer_fn(candidate)
+            if conformer is None:
+                items[index].valid = False
+                items[index].rejection_reason = "AMSR conformer construction failed"
+                continue
+            conformer_indices.append(index)
+            candidate_mols.append(conformer)
+
+        results = self.pipeline.score_batch(candidate_mols) if candidate_mols else []
+        for index, result in zip(conformer_indices, results, strict=True):
+            diagnostics[index] = result
+            if not result.accepted:
+                items[index].valid = False
+                items[index].rejection_reason = result.rejection_reason
+                continue
+            for objective in self.objectives:
+                score = objective.score_batch([result])[0]
+                items[index].scores[objective.name] = score
+
+        if self.config.record_scores:
+            self._record(token_sequences, decoded, items, diagnostics)
+        self.evaluation_number += 1
+        return items
+
+    def get_rewards(self, scored: list[ScoredItem]) -> np.ndarray:
+        return super().get_rewards(scored)
+
+    def _record(
+        self,
+        token_sequences: list[list[str]],
+        decoded: list[DecodedAMSR | None],
+        items: list[ScoredItem],
+        diagnostics: list[StructureScore | None],
+    ) -> None:
+        with self.score_log.open("a") as output:
+            for index, (tokens, candidate, item, diagnostic) in enumerate(
+                zip(token_sequences, decoded, items, diagnostics, strict=True)
+            ):
+                record = {
+                    "evaluation": self.evaluation_number,
+                    "index": index,
+                    "amsr": "".join(tokens),
+                    "smiles": (
+                        Chem.MolToSmiles(candidate.mol, isomericSmiles=True)
+                        if candidate is not None
+                        else None
+                    ),
+                    "accepted": item.valid,
+                    "rejection_reason": item.rejection_reason,
+                    "scores": item.scores,
+                    "gnina_cnn_affinity": (
+                        diagnostic.cnn_affinity if diagnostic is not None else None
+                    ),
+                    "roshambo_tanimoto_combo": (
+                        diagnostic.roshambo_tanimoto_combo if diagnostic is not None else None
+                    ),
+                    "minimized_rmsd": (
+                        diagnostic.minimized_rmsd if diagnostic is not None else None
+                    ),
+                }
+                output.write(json.dumps(record, sort_keys=True) + "\n")
 
 
-_PAINS_CATALOG: FilterCatalog.FilterCatalog | None = None
-
-
-def _get_pains_catalog() -> FilterCatalog.FilterCatalog:
-    global _PAINS_CATALOG
-    if _PAINS_CATALOG is None:
-        params = FilterCatalog.FilterCatalogParams()
-        params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS)
-        _PAINS_CATALOG = FilterCatalog.FilterCatalog(params)
-    return _PAINS_CATALOG
-
-
-def druglike_filter(mol: Mol) -> tuple[bool, str]:
-    """Check drug-likeness. Returns (rejected, reason)."""
-    mw = Descriptors.MolWt(mol)
-    if mw < 150 or mw > 600:
-        return True, f"MW={mw:.0f} outside [150, 600]"
-
-    logp = Descriptors.MolLogP(mol)
-    if logp < -1 or logp > 6:
-        return True, f"logP={logp:.1f} outside [-1, 6]"
-
-    if Descriptors.NumHDonors(mol) > 5:
-        return True, "HBD > 5"
-
-    if Descriptors.NumHAcceptors(mol) > 10:
-        return True, "HBA > 10"
-
-    if _get_pains_catalog().HasMatch(mol):
-        return True, "PAINS match"
-
-    return False, ""
-
-
-def build() -> Objectives:
-    """Default molecular objectives. Called by: trl rl ... --objectives mtrl.objectives:build"""
-    return Objectives(
-        objectives=[
-            SAScoreObjective(name="sa", direction="minimize", reject_above=6.0),
-            QEDObjective(name="qed", direction="maximize"),
-        ],
-        decode_fn=detokenize,
-        pareto_lambda=0.1,
-        extra_rejection_fn=druglike_filter,
-    )
+def build() -> DockingObjectives:
+    """Factory loaded by trl after `mtrl rl` installs its scoring configuration."""
+    return DockingObjectives(ScoringConfig.from_env())

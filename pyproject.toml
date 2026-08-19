@@ -14,6 +14,7 @@ dependencies = [
     "torch>=2.4,<3",
     "trl>=0.1.0",
     "amsr>=0.1.0",
+    "lad @ git+https://github.com/OrogenTX/lad.git@2334b9e4c198ba0da67f9b39ec162f2a3f47b034 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "rdkit",
     "typer>=0.9",
 ]
@@ -41,8 +42,8 @@ required-environments = [
 ]
 
 [tool.uv.sources]
-trl = { git = "https://github.com/hstern2/trl", branch = "main" }
-amsr = { git = "https://github.com/hstern2/amsr", branch = "main" }
+trl = { git = "https://github.com/hstern2/trl", rev = "5f9755251a7973a360581e101a2754a1debfe893" }
+amsr = { git = "https://github.com/hstern2/amsr", rev = "67dc180799a78771a0318dda496e5c2ab9b0f251" }
 torch = [
     { index = "pytorch-cu121", marker = "sys_platform != 'darwin'" },
 ]
