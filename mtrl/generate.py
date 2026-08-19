@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import hashlib
-import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TextIO
 
 import torch
 from rdkit import Chem
@@ -13,20 +12,14 @@ from trl.model.transformer import TransformerConfig, TransformerLM
 
 from mtrl import detokenize
 
+ProgressCallback = Callable[[str, int, int], None]
+
 
 def _strip_wrapper_prefix(name: str) -> str:
     for prefix in ("module.", "_orig_mod."):
         if name.startswith(prefix):
             return _strip_wrapper_prefix(name.removeprefix(prefix))
     return name
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def load_model(checkpoint: Path, device: torch.device) -> tuple[TransformerLM, Vocab, int]:
@@ -55,6 +48,7 @@ def sample_tokens(
     top_k: int,
     top_p: float,
     device: torch.device,
+    progress: ProgressCallback | None = None,
 ) -> list[list[str]]:
     token_sequences: list[list[str]] = []
     while len(token_sequences) < n:
@@ -69,57 +63,49 @@ def sample_tokens(
             device=device,
         )
         token_sequences.extend(vocab.decode(sequence) for sequence in ids)
+        if progress is not None:
+            progress("sample", len(token_sequences), n)
     return token_sequences
 
 
 def write_conformers(
     token_sequences: list[list[str]],
-    output_dir: Path,
+    output: TextIO,
     *,
-    provenance: dict[str, Any],
-) -> dict[str, Any]:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    strings_path = output_dir / "strings.amsr"
-    sdf_path = output_dir / "conformers.sdf"
-
-    strings_path.write_text("".join(f"{''.join(tokens)}\n" for tokens in token_sequences))
-    writer = Chem.SDWriter(str(sdf_path))
+    progress: ProgressCallback | None = None,
+) -> dict[str, float | int]:
+    writer = Chem.SDWriter(output)
     generated = 0
+    total = len(token_sequences)
     try:
         for sample_index, tokens in enumerate(token_sequences):
             amsr = "".join(tokens)
             mol = detokenize(tokens)
-            if mol is None:
-                continue
-            mol.SetProp("_Name", f"sample_{sample_index:06d}")
-            mol.SetIntProp("MTRL_SAMPLE_INDEX", sample_index)
-            mol.SetProp("AMSR", amsr)
-            mol.SetProp("CANONICAL_SMILES", Chem.MolToSmiles(mol))
-            writer.write(mol)
-            generated += 1
+            if mol is not None:
+                mol.SetProp("_Name", f"sample_{sample_index:06d}")
+                mol.SetIntProp("MTRL_SAMPLE_INDEX", sample_index)
+                mol.SetProp("AMSR", amsr)
+                mol.SetProp("CANONICAL_SMILES", Chem.MolToSmiles(mol))
+                writer.write(mol)
+                generated += 1
+            completed = sample_index + 1
+            if progress is not None and (completed % 50 == 0 or completed == total):
+                writer.flush()
+                progress("conformer", completed, total)
     finally:
         writer.close()
 
-    summary: dict[str, Any] = {
-        **provenance,
+    return {
         "sampled_strings": len(token_sequences),
         "decoded_conformers": generated,
         "decode_failures": len(token_sequences) - generated,
         "valid_fraction": generated / len(token_sequences) if token_sequences else 0.0,
-        "outputs": {
-            "amsr_strings": strings_path.name,
-            "conformers_sdf": sdf_path.name,
-        },
     }
-    (output_dir / "summary.json").write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n"
-    )
-    return summary
 
 
 def generate(
     checkpoint: Path,
-    output_dir: Path,
+    output: TextIO,
     *,
     n: int,
     batch_size: int,
@@ -128,7 +114,8 @@ def generate(
     top_p: float,
     seed: int,
     device_name: str,
-) -> dict[str, Any]:
+    progress: ProgressCallback | None = None,
+) -> dict[str, float | int]:
     if device_name == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
@@ -151,17 +138,10 @@ def generate(
         top_k=top_k,
         top_p=top_p,
         device=device,
+        progress=progress,
     )
     return write_conformers(
         token_sequences,
-        output_dir,
-        provenance={
-            "checkpoint": str(checkpoint.resolve()),
-            "checkpoint_sha256": _sha256(checkpoint),
-            "device": str(device),
-            "seed": seed,
-            "temperature": temperature,
-            "top_k": top_k,
-            "top_p": top_p,
-        },
+        output,
+        progress=progress,
     )

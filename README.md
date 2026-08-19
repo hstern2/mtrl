@@ -11,12 +11,12 @@ Sample a pretrained checkpoint and decode the emitted AMSR geometry without
 filters, cost functions, minimization, or RL:
 
 ```bash
-uv run mtrl generate /path/to/best.pt -n 100 --output-dir generated
+uv run mtrl generate /path/to/best.pt -n 100 > conformers.sdf
 ```
 
-The new output directory contains `strings.amsr`, `conformers.sdf`, and
-`summary.json`. A stringent AMSR decode and successful conformer construction
-are the only requirements for inclusion in the SDF.
+SDF is written to stdout; progress goes to stderr. Each record includes the
+emitted AMSR string as a property. A stringent AMSR decode and successful
+conformer construction are the only requirements for inclusion.
 
 ## Structure-scored RL
 

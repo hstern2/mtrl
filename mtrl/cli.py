@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from pathlib import Path
 
 import typer
@@ -15,7 +16,6 @@ app = typer.Typer(
 def generate(
     checkpoint: Path = typer.Argument(..., exists=True, dir_okay=False),
     n: int = typer.Option(100, "-n", help="Number of AMSR strings to sample"),
-    output_dir: Path = typer.Option(Path("generated/"), help="New output directory"),
     batch_size: int = typer.Option(64, help="Sampling batch size"),
     temperature: float = typer.Option(0.8),
     top_k: int = typer.Option(0, help="Top-k sampling; 0 disables it"),
@@ -36,13 +36,14 @@ def generate(
         raise typer.BadParameter("--top-k must be >= 0")
     if not 0 < top_p <= 1:
         raise typer.BadParameter("--top-p must be in (0, 1]")
-    if output_dir.exists() and any(output_dir.iterdir()):
-        raise typer.BadParameter(f"output directory is not empty: {output_dir}")
+
+    def report_progress(phase: str, completed: int, total: int) -> None:
+        typer.echo(f"[{phase}] {completed:,}/{total:,}", err=True)
 
     try:
         summary = generate_conformers(
             checkpoint.resolve(),
-            output_dir.resolve(),
+            sys.stdout,
             n=n,
             batch_size=batch_size,
             temperature=temperature,
@@ -50,13 +51,15 @@ def generate(
             top_p=top_p,
             seed=seed,
             device_name=device,
+            progress=report_progress,
         )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
 
     typer.echo(
-        f"Wrote {summary['decoded_conformers']}/{summary['sampled_strings']} "
-        f"decoded conformers to {output_dir.resolve()}"
+        f"[done] wrote {summary['decoded_conformers']}/{summary['sampled_strings']} "
+        "decoded conformers",
+        err=True,
     )
 
 

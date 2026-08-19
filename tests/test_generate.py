@@ -1,11 +1,11 @@
-import json
+import io
 
 from rdkit import Chem
 
 from mtrl.generate import write_conformers
 
 
-def test_write_conformers_records_strings_sdf_and_summary(tmp_path, monkeypatch) -> None:
+def test_write_conformers_streams_sdf_and_returns_counts(monkeypatch) -> None:
     def fake_detokenize(tokens: list[str]):
         if tokens == ["bad"]:
             return None
@@ -17,14 +17,12 @@ def test_write_conformers_records_strings_sdf_and_summary(tmp_path, monkeypatch)
         return mol
 
     monkeypatch.setattr("mtrl.generate.detokenize", fake_detokenize)
-    summary = write_conformers(
-        [["C", "C", "O"], ["bad"]],
-        tmp_path,
-        provenance={"seed": 7},
-    )
+    output = io.StringIO()
+    summary = write_conformers([["C", "C", "O"], ["bad"]], output)
 
-    assert (tmp_path / "strings.amsr").read_text().splitlines() == ["CCO", "bad"]
-    assert len([mol for mol in Chem.SDMolSupplier(str(tmp_path / "conformers.sdf")) if mol]) == 1
+    sdf = output.getvalue()
+    assert sdf.count("$$$$") == 1
+    assert ">  <AMSR>" in sdf
+    assert "CCO" in sdf
     assert summary["decoded_conformers"] == 1
     assert summary["decode_failures"] == 1
-    assert json.loads((tmp_path / "summary.json").read_text()) == summary
