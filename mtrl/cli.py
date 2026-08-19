@@ -16,7 +16,11 @@ app = typer.Typer(
 def generate(
     checkpoint: Path = typer.Argument(..., exists=True, dir_okay=False),
     n: int = typer.Option(100, "-n", help="Number of AMSR strings to sample"),
-    batch_size: int = typer.Option(64, help="Sampling batch size"),
+    batch_size: int = typer.Option(256, help="AMSR strings sampled together on the GPU"),
+    conformer_workers: int = typer.Option(
+        0,
+        help="Parallel CPU conformer workers; 0 selects up to 16",
+    ),
     temperature: float = typer.Option(0.8),
     top_k: int = typer.Option(0, help="Top-k sampling; 0 disables it"),
     top_p: float = typer.Option(1.0, help="Nucleus sampling threshold"),
@@ -30,6 +34,8 @@ def generate(
         raise typer.BadParameter("-n must be > 0")
     if batch_size <= 0:
         raise typer.BadParameter("--batch-size must be > 0")
+    if conformer_workers < 0:
+        raise typer.BadParameter("--conformer-workers must be >= 0")
     if temperature <= 0:
         raise typer.BadParameter("--temperature must be > 0")
     if top_k < 0:
@@ -37,11 +43,13 @@ def generate(
     if not 0 < top_p <= 1:
         raise typer.BadParameter("--top-p must be in (0, 1]")
 
-    def report_progress(phase: str, completed: int, total: int) -> None:
-        typer.echo(f"[{phase}] {completed:,}/{total:,}", err=True)
+    if conformer_workers == 0:
+        from mtrl.generate import default_conformer_workers
+
+        conformer_workers = default_conformer_workers()
 
     try:
-        summary = generate_conformers(
+        generate_conformers(
             checkpoint.resolve(),
             sys.stdout,
             n=n,
@@ -51,16 +59,11 @@ def generate(
             top_p=top_p,
             seed=seed,
             device_name=device,
-            progress=report_progress,
+            conformer_workers=conformer_workers,
         )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
 
-    typer.echo(
-        f"[done] wrote {summary['decoded_conformers']}/{summary['sampled_strings']} "
-        "decoded conformers",
-        err=True,
-    )
 
 
 @app.command()

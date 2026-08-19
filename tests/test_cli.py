@@ -15,10 +15,8 @@ def test_generate_writes_only_sdf_to_stdout(tmp_path, monkeypatch) -> None:
     checkpoint = tmp_path / "model.pt"
     checkpoint.write_bytes(b"checkpoint")
 
-    def fake_generate(checkpoint_path, output, *, progress, **kwargs):
+    def fake_generate(checkpoint_path, output, **kwargs):
         output.write("molecule\n$$$$\n")
-        progress("sample", 1, 1)
-        progress("conformer", 1, 1)
         return {"sampled_strings": 1, "decoded_conformers": 1}
 
     monkeypatch.setattr("mtrl.generate.generate", fake_generate)
@@ -26,6 +24,4 @@ def test_generate_writes_only_sdf_to_stdout(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert result.stdout == "molecule\n$$$$\n"
-    assert "[sample] 1/1" in result.stderr
-    assert "[conformer] 1/1" in result.stderr
-    assert "[done] wrote 1/1 decoded conformers" in result.stderr
+    assert result.stderr == ""

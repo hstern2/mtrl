@@ -14,9 +14,12 @@ filters, cost functions, minimization, or RL:
 uv run mtrl generate /path/to/best.pt -n 100 > conformers.sdf
 ```
 
-SDF is written to stdout; progress goes to stderr. Each record includes the
-emitted AMSR string as a property. A stringent AMSR decode and successful
-conformer construction are the only requirements for inclusion.
+Only SDF is written to stdout, with each record flushed as it is completed.
+Each record includes the emitted AMSR string as a property. Transformer
+sampling uses GPU batches of 256 by default; conformer construction uses up to
+16 CPU workers. Parallel records are emitted in completion order;
+`MTRL_SAMPLE_INDEX` preserves sampling order. A stringent AMSR decode and
+successful conformer construction are the only requirements for inclusion.
 
 ## Structure-scored RL
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import multiprocessing
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import TextIO
 
@@ -11,8 +13,7 @@ from trl.generation.sampler import sample
 from trl.model.transformer import TransformerConfig, TransformerLM
 
 from mtrl import detokenize
-
-ProgressCallback = Callable[[str, int, int], None]
+from mtrl.conformer import build_conformer
 
 
 def _strip_wrapper_prefix(name: str) -> str:
@@ -48,7 +49,6 @@ def sample_tokens(
     top_k: int,
     top_p: float,
     device: torch.device,
-    progress: ProgressCallback | None = None,
 ) -> list[list[str]]:
     token_sequences: list[list[str]] = []
     while len(token_sequences) < n:
@@ -63,35 +63,59 @@ def sample_tokens(
             device=device,
         )
         token_sequences.extend(vocab.decode(sequence) for sequence in ids)
-        if progress is not None:
-            progress("sample", len(token_sequences), n)
     return token_sequences
+
+
+def default_conformer_workers() -> int:
+    return min(16, os.cpu_count() or 1)
+
+
+def _write_mol(
+    writer: Chem.SDWriter,
+    mol: Chem.Mol,
+    sample_index: int,
+    tokens: list[str],
+) -> None:
+    amsr = "".join(tokens)
+    mol.SetProp("_Name", f"sample_{sample_index:06d}")
+    mol.SetIntProp("MTRL_SAMPLE_INDEX", sample_index)
+    mol.SetProp("AMSR", amsr)
+    mol.SetProp("CANONICAL_SMILES", Chem.MolToSmiles(mol))
+    writer.write(mol)
+    writer.flush()
 
 
 def write_conformers(
     token_sequences: list[list[str]],
     output: TextIO,
     *,
-    progress: ProgressCallback | None = None,
+    workers: int = 1,
 ) -> dict[str, float | int]:
+    if workers <= 0:
+        raise ValueError("conformer workers must be positive")
+    workers = min(workers, max(1, len(token_sequences)))
     writer = Chem.SDWriter(output)
     generated = 0
-    total = len(token_sequences)
     try:
-        for sample_index, tokens in enumerate(token_sequences):
-            amsr = "".join(tokens)
-            mol = detokenize(tokens)
-            if mol is not None:
-                mol.SetProp("_Name", f"sample_{sample_index:06d}")
-                mol.SetIntProp("MTRL_SAMPLE_INDEX", sample_index)
-                mol.SetProp("AMSR", amsr)
-                mol.SetProp("CANONICAL_SMILES", Chem.MolToSmiles(mol))
-                writer.write(mol)
-                generated += 1
-            completed = sample_index + 1
-            if progress is not None and (completed % 50 == 0 or completed == total):
-                writer.flush()
-                progress("conformer", completed, total)
+        if workers == 1:
+            for sample_index, tokens in enumerate(token_sequences):
+                mol = detokenize(tokens)
+                if mol is not None:
+                    _write_mol(writer, mol, sample_index, tokens)
+                    generated += 1
+        else:
+            context = multiprocessing.get_context("spawn")
+            with ProcessPoolExecutor(max_workers=workers, mp_context=context) as pool:
+                futures = {
+                    pool.submit(build_conformer, tokens): (sample_index, tokens)
+                    for sample_index, tokens in enumerate(token_sequences)
+                }
+                for future in as_completed(futures):
+                    sample_index, tokens = futures[future]
+                    mol = future.result()
+                    if mol is not None:
+                        _write_mol(writer, mol, sample_index, tokens)
+                        generated += 1
     finally:
         writer.close()
 
@@ -114,7 +138,7 @@ def generate(
     top_p: float,
     seed: int,
     device_name: str,
-    progress: ProgressCallback | None = None,
+    conformer_workers: int,
 ) -> dict[str, float | int]:
     if device_name == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -138,10 +162,9 @@ def generate(
         top_k=top_k,
         top_p=top_p,
         device=device,
-        progress=progress,
     )
     return write_conformers(
         token_sequences,
         output,
-        progress=progress,
+        workers=conformer_workers,
     )
