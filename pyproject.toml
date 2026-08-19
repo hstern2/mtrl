@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mtrl"
 version = "0.1.0"
-description = "Molecular generation with AMSR"
+description = "AMSR molecular generation and reinforcement learning"
 authors = [{ name = "Harry Stern" }]
 license = { file = "LICENSE" }
 readme = "README.md"
@@ -42,7 +42,7 @@ required-environments = [
 ]
 
 [tool.uv.sources]
-trl = { git = "https://github.com/hstern2/trl", rev = "5f9755251a7973a360581e101a2754a1debfe893" }
+trl = { git = "https://github.com/hstern2/trl", rev = "adb918e2fc448df91b98eb563e4ba8736d3188d9" }
 amsr = { git = "https://github.com/hstern2/amsr", rev = "67dc180799a78771a0318dda496e5c2ab9b0f251" }
 torch = [
     { index = "pytorch-cu121", marker = "sys_platform != 'darwin'" },

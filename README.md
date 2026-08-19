@@ -1,7 +1,24 @@
 # mtrl
 
-Pareto reinforcement learning for the 3D AMSR transformer in
-[trl](https://github.com/hstern2/trl).
+AMSR molecular generation and reinforcement learning built on the generic
+token-sequence package [trl](https://github.com/hstern2/trl). `mtrl` owns AMSR
+decoding, conformer construction, molecular filters, structure scoring, and the
+molecular RL workflow.
+
+## Generate conformers
+
+Sample a pretrained checkpoint and decode the emitted AMSR geometry without
+filters, cost functions, minimization, or RL:
+
+```bash
+uv run mtrl generate /path/to/best.pt -n 100 --output-dir generated
+```
+
+The new output directory contains `strings.amsr`, `conformers.sdf`, and
+`summary.json`. A stringent AMSR decode and successful conformer construction
+are the only requirements for inclusion in the SDF.
+
+## Structure-scored RL
 
 For each generated AMSR string, `mtrl`:
 
@@ -19,7 +36,7 @@ Accepted molecules have two separately maximized Pareto objectives:
 drug-likeness filter are not used. The model-emitted conformer is scored; mtrl
 does not generate replacement conformers.
 
-## Install
+### Install
 
 GNINA and LillyMol (when its optional filter is enabled) must be available in
 `PATH`.
@@ -28,7 +45,7 @@ GNINA and LillyMol (when its optional filter is enabled) must be available in
 uv sync
 ```
 
-## Run
+### Run
 
 Start from the final pretrained `best.pt` checkpoint:
 
