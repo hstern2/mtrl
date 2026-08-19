@@ -49,11 +49,17 @@ def test_write_conformers_streams_sdf_and_returns_counts(monkeypatch) -> None:
 
     monkeypatch.setattr("mtrl.generate.detokenize", fake_detokenize)
     output = io.StringIO()
-    summary = write_conformers([["C", "C", "O"], ["bad"]], output)
+    summary = write_conformers(
+        [["C", "C", "O"], ["bad"]],
+        output,
+        properties={"MTRL_SEED": "7"},
+    )
 
     sdf = output.getvalue()
     assert sdf.count("$$$$") == 1
     assert ">  <AMSR>" in sdf
+    assert ">  <MTRL_SEED>" in sdf
+    assert "\n7\n" in sdf
     assert "CCO" in sdf
     assert summary["decoded_conformers"] == 1
     assert summary["decode_failures"] == 1

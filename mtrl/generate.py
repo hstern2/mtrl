@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import multiprocessing
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from collections.abc import Mapping
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import TextIO
 
@@ -81,12 +82,15 @@ def _write_mol(
     mol: Chem.Mol,
     sample_index: int,
     tokens: list[str],
+    properties: Mapping[str, str],
 ) -> None:
     amsr = "".join(tokens)
     mol.SetProp("_Name", f"sample_{sample_index:06d}")
     mol.SetIntProp("MTRL_SAMPLE_INDEX", sample_index)
     mol.SetProp("AMSR", amsr)
     mol.SetProp("CANONICAL_SMILES", Chem.MolToSmiles(mol))
+    for name, value in properties.items():
+        mol.SetProp(name, value)
     writer.write(mol)
     writer.flush()
 
@@ -96,10 +100,12 @@ def write_conformers(
     output: TextIO,
     *,
     workers: int = 1,
+    properties: Mapping[str, str] | None = None,
 ) -> dict[str, float | int]:
     if workers <= 0:
         raise ValueError("conformer workers must be positive")
     workers = min(workers, max(1, len(token_sequences)))
+    record_properties = properties or {}
     writer = Chem.SDWriter(output)
     generated = 0
     try:
@@ -107,20 +113,17 @@ def write_conformers(
             for sample_index, tokens in enumerate(token_sequences):
                 mol = detokenize(tokens)
                 if mol is not None:
-                    _write_mol(writer, mol, sample_index, tokens)
+                    _write_mol(writer, mol, sample_index, tokens, record_properties)
                     generated += 1
         else:
             context = multiprocessing.get_context("spawn")
             with ProcessPoolExecutor(max_workers=workers, mp_context=context) as pool:
-                futures = {
-                    pool.submit(build_conformer, tokens): (sample_index, tokens)
-                    for sample_index, tokens in enumerate(token_sequences)
-                }
-                for future in as_completed(futures):
-                    sample_index, tokens = futures[future]
-                    mol = future.result()
+                conformers = pool.map(build_conformer, token_sequences, chunksize=1)
+                for sample_index, (tokens, mol) in enumerate(
+                    zip(token_sequences, conformers, strict=True)
+                ):
                     if mol is not None:
-                        _write_mol(writer, mol, sample_index, tokens)
+                        _write_mol(writer, mol, sample_index, tokens, record_properties)
                         generated += 1
     finally:
         writer.close()
@@ -185,4 +188,5 @@ def generate(
         token_sequences,
         output,
         workers=conformer_workers,
+        properties={"MTRL_SEED": str(seed)},
     )

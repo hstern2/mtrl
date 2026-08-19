@@ -19,9 +19,10 @@ Each record includes the emitted AMSR string as a property. Transformer
 sampling selects a conservative batch from available device memory, capped at
 256; conformer construction respects CPU affinity, workload size, and a
 16-worker cap. Override either with `--batch-size` or `--conformer-workers`.
-Parallel records are emitted in completion order;
-`MTRL_SAMPLE_INDEX` preserves sampling order. A stringent AMSR decode and
-successful conformer construction are the only requirements for inclusion.
+Parallel construction preserves sampling order. The default seed is random;
+pass `--seed INTEGER` to reproduce a run. Each record stores that seed as
+`MTRL_SEED`. A stringent AMSR decode and successful conformer construction are
+the only requirements for inclusion.
 
 ## Structure-scored RL
 

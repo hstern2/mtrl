@@ -1,5 +1,6 @@
 import json
 import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -47,7 +48,11 @@ def generate(
             "probability fraction; 1.0 means no restriction and is usually appropriate"
         ),
     ),
-    seed: int = typer.Option(0),
+    seed: int | None = typer.Option(
+        None,
+        help="Random seed; provide an integer to reproduce a run",
+        show_default="random each run",
+    ),
     device: str = typer.Option("auto", help="auto, cpu, cuda, or a CUDA device such as cuda:0"),
 ) -> None:
     """Sample AMSR strings and decode their encoded 3D conformers without scoring."""
@@ -65,6 +70,8 @@ def generate(
         raise typer.BadParameter("--top-k must be >= 0")
     if not 0 < top_p <= 1:
         raise typer.BadParameter("--top-p must be in (0, 1]")
+    if seed is None:
+        seed = secrets.randbits(63)
 
     try:
         generate_conformers(

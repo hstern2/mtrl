@@ -20,6 +20,8 @@ def test_short_help_option() -> None:
     assert "Maximum number of likely choices" in generate_help.stdout
     assert "probability fraction" in generate_help.stdout
     assert "usually appropriate" in generate_help.stdout
+    assert "random each run" in generate_help.stdout
+    assert "reproduce a run" in generate_help.stdout
 
 
 def test_generate_writes_only_sdf_to_stdout(tmp_path, monkeypatch) -> None:
@@ -27,6 +29,7 @@ def test_generate_writes_only_sdf_to_stdout(tmp_path, monkeypatch) -> None:
     checkpoint.write_bytes(b"checkpoint")
 
     received = {}
+    monkeypatch.setattr("mtrl.cli.secrets.randbits", lambda bits: 8675309)
 
     def fake_generate(checkpoint_path, output, **kwargs):
         received.update(kwargs)
@@ -41,3 +44,12 @@ def test_generate_writes_only_sdf_to_stdout(tmp_path, monkeypatch) -> None:
     assert result.stderr == ""
     assert received["batch_size"] == _CLI_BATCH_SIZE
     assert received["conformer_workers"] == _CLI_CONFORMER_WORKERS
+    assert received["seed"] == 8675309
+
+    received.clear()
+    explicit = CliRunner().invoke(
+        app,
+        ["generate", str(checkpoint), "-n", "1", "--seed", "123"],
+    )
+    assert explicit.exit_code == 0
+    assert received["seed"] == 123
