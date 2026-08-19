@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing
-import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from math import ceil
 from pathlib import Path
 from typing import TextIO
 
@@ -15,6 +13,7 @@ from trl.model.transformer import TransformerConfig, TransformerLM
 
 from mtrl import detokenize
 from mtrl.conformer import build_conformer
+from mtrl.hardware import default_conformer_workers, sampling_batch_from_free_gib
 
 
 def _strip_wrapper_prefix(name: str) -> str:
@@ -71,32 +70,10 @@ def default_sampling_batch_size(device: torch.device) -> int:
     """Choose a conservative sampling batch with one inexpensive device query."""
     if device.type == "cuda":
         free_bytes, _ = torch.cuda.mem_get_info(device)
-        free_gib = free_bytes / 1024**3
-        if free_gib >= 10:
-            return 256
-        if free_gib >= 5:
-            return 128
-        if free_gib >= 2.5:
-            return 64
-        return 32
+        return sampling_batch_from_free_gib(free_bytes / 1024**3)
     if device.type == "mps":
         return 64
     return 32
-
-
-def available_cpu_count() -> int:
-    """Return CPUs available to this process, respecting affinity when possible."""
-    try:
-        return len(os.sched_getaffinity(0))
-    except (AttributeError, OSError):
-        return os.cpu_count() or 1
-
-
-def default_conformer_workers(task_count: int) -> int:
-    """Choose enough workers for throughput without excessive process startup."""
-    hardware_limit = min(16, max(1, available_cpu_count() - 1))
-    workload_limit = max(1, ceil(task_count / 4))
-    return min(hardware_limit, workload_limit)
 
 
 def _write_mol(

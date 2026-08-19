@@ -5,6 +5,11 @@ from pathlib import Path
 
 import typer
 
+from mtrl.hardware import default_conformer_workers, fast_cli_sampling_batch_size
+
+_CLI_BATCH_SIZE = fast_cli_sampling_batch_size()
+_CLI_CONFORMER_WORKERS = default_conformer_workers(100)
+
 app = typer.Typer(
     help="mtrl: molecular generation with AMSR + trl",
     add_completion=False,
@@ -17,12 +22,12 @@ def generate(
     checkpoint: Path = typer.Argument(..., exists=True, dir_okay=False),
     n: int = typer.Option(100, "-n", help="Number of AMSR strings to sample"),
     batch_size: int = typer.Option(
-        0,
-        help="AMSR strings sampled together; 0 selects from available device memory",
+        _CLI_BATCH_SIZE,
+        help="AMSR strings sampled together on the selected device",
     ),
     conformer_workers: int = typer.Option(
-        0,
-        help="Parallel CPU conformer workers; 0 uses CPU affinity and workload size",
+        _CLI_CONFORMER_WORKERS,
+        help="Parallel CPU conformer workers",
     ),
     temperature: float = typer.Option(0.8),
     top_k: int = typer.Option(0, help="Top-k sampling; 0 disables it"),
@@ -35,10 +40,10 @@ def generate(
 
     if n <= 0:
         raise typer.BadParameter("-n must be > 0")
-    if batch_size < 0:
-        raise typer.BadParameter("--batch-size must be >= 0")
-    if conformer_workers < 0:
-        raise typer.BadParameter("--conformer-workers must be >= 0")
+    if batch_size <= 0:
+        raise typer.BadParameter("--batch-size must be > 0")
+    if conformer_workers <= 0:
+        raise typer.BadParameter("--conformer-workers must be > 0")
     if temperature <= 0:
         raise typer.BadParameter("--temperature must be > 0")
     if top_k < 0:

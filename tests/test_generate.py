@@ -5,10 +5,10 @@ import torch
 from rdkit import Chem
 
 from mtrl.generate import (
-    default_conformer_workers,
     default_sampling_batch_size,
     write_conformers,
 )
+from mtrl.hardware import default_conformer_workers
 
 
 @pytest.mark.parametrize(
@@ -29,7 +29,7 @@ def test_auto_sampling_batch_uses_free_device_memory(
 
 
 def test_auto_conformer_workers_respects_affinity_and_workload(monkeypatch) -> None:
-    monkeypatch.setattr("mtrl.generate.os.sched_getaffinity", lambda pid: set(range(32)))
+    monkeypatch.setattr("mtrl.hardware.os.sched_getaffinity", lambda pid: set(range(32)))
 
     assert default_conformer_workers(1) == 1
     assert default_conformer_workers(20) == 5
