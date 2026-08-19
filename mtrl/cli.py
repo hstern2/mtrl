@@ -29,19 +29,22 @@ def generate(
         _CLI_CONFORMER_WORKERS,
         help="Parallel CPU conformer workers",
     ),
-    temperature: float = typer.Option(0.8),
+    temperature: float = typer.Option(
+        0.8,
+        help="Randomness: lower is more conservative; higher gives more variety",
+    ),
     top_k: int = typer.Option(
         0,
         help=(
-            "At each token, sample only from the K most probable choices; "
-            "0 considers the full vocabulary"
+            "Maximum number of likely choices kept for each next AMSR token; "
+            "0 means no limit and is usually appropriate"
         ),
     ),
     top_p: float = typer.Option(
         1.0,
         help=(
-            "At each token, sample from the smallest set whose cumulative "
-            "probability reaches P; 1.0 considers the full vocabulary"
+            "Keep enough likely choices for each next AMSR token to cover this "
+            "probability fraction; 1.0 means no restriction and is usually appropriate"
         ),
     ),
     seed: int = typer.Option(0),
