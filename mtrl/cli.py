@@ -4,7 +4,11 @@ from pathlib import Path
 
 import typer
 
-app = typer.Typer(help="mtrl: molecular generation with AMSR + trl")
+app = typer.Typer(
+    help="mtrl: molecular generation with AMSR + trl",
+    add_completion=False,
+    context_settings={"help_option_names": ["-h", "--help"]},
+)
 
 
 @app.command()
