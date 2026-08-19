@@ -22,7 +22,7 @@ required-markers = [
 [[package]]
 name = "amsr"
 version = "0.1.6"
-source = { git = "https://github.com/hstern2/amsr?rev=67dc180799a78771a0318dda496e5c2ab9b0f251#67dc180799a78771a0318dda496e5c2ab9b0f251" }
+source = { git = "https://github.com/hstern2/amsr?rev=0ba7b089fb46097ce2f9d83d26bd864521e28f7e#0ba7b089fb46097ce2f9d83d26bd864521e28f7e" }
 dependencies = [
     { name = "anytree" },
     { name = "levenshtein" },
@@ -790,7 +790,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "amsr", git = "https://github.com/hstern2/amsr?rev=67dc180799a78771a0318dda496e5c2ab9b0f251" },
+    { name = "amsr", git = "https://github.com/hstern2/amsr?rev=0ba7b089fb46097ce2f9d83d26bd864521e28f7e" },
     { name = "lad", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", git = "https://github.com/OrogenTX/lad.git?rev=2334b9e4c198ba0da67f9b39ec162f2a3f47b034" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4" },
