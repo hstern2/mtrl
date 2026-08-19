@@ -16,10 +16,13 @@ app = typer.Typer(
 def generate(
     checkpoint: Path = typer.Argument(..., exists=True, dir_okay=False),
     n: int = typer.Option(100, "-n", help="Number of AMSR strings to sample"),
-    batch_size: int = typer.Option(256, help="AMSR strings sampled together on the GPU"),
+    batch_size: int = typer.Option(
+        0,
+        help="AMSR strings sampled together; 0 selects from available device memory",
+    ),
     conformer_workers: int = typer.Option(
         0,
-        help="Parallel CPU conformer workers; 0 selects up to 16",
+        help="Parallel CPU conformer workers; 0 uses CPU affinity and workload size",
     ),
     temperature: float = typer.Option(0.8),
     top_k: int = typer.Option(0, help="Top-k sampling; 0 disables it"),
@@ -32,8 +35,8 @@ def generate(
 
     if n <= 0:
         raise typer.BadParameter("-n must be > 0")
-    if batch_size <= 0:
-        raise typer.BadParameter("--batch-size must be > 0")
+    if batch_size < 0:
+        raise typer.BadParameter("--batch-size must be >= 0")
     if conformer_workers < 0:
         raise typer.BadParameter("--conformer-workers must be >= 0")
     if temperature <= 0:
@@ -42,11 +45,6 @@ def generate(
         raise typer.BadParameter("--top-k must be >= 0")
     if not 0 < top_p <= 1:
         raise typer.BadParameter("--top-p must be in (0, 1]")
-
-    if conformer_workers == 0:
-        from mtrl.generate import default_conformer_workers
-
-        conformer_workers = default_conformer_workers()
 
     try:
         generate_conformers(

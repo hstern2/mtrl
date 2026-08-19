@@ -3,6 +3,7 @@ from __future__ import annotations
 import multiprocessing
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from math import ceil
 from pathlib import Path
 from typing import TextIO
 
@@ -66,8 +67,36 @@ def sample_tokens(
     return token_sequences
 
 
-def default_conformer_workers() -> int:
-    return min(16, os.cpu_count() or 1)
+def default_sampling_batch_size(device: torch.device) -> int:
+    """Choose a conservative sampling batch with one inexpensive device query."""
+    if device.type == "cuda":
+        free_bytes, _ = torch.cuda.mem_get_info(device)
+        free_gib = free_bytes / 1024**3
+        if free_gib >= 10:
+            return 256
+        if free_gib >= 5:
+            return 128
+        if free_gib >= 2.5:
+            return 64
+        return 32
+    if device.type == "mps":
+        return 64
+    return 32
+
+
+def available_cpu_count() -> int:
+    """Return CPUs available to this process, respecting affinity when possible."""
+    try:
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        return os.cpu_count() or 1
+
+
+def default_conformer_workers(task_count: int) -> int:
+    """Choose enough workers for throughput without excessive process startup."""
+    hardware_limit = min(16, max(1, available_cpu_count() - 1))
+    workload_limit = max(1, ceil(task_count / 4))
+    return min(hardware_limit, workload_limit)
 
 
 def _write_mol(
@@ -141,7 +170,15 @@ def generate(
     conformer_workers: int,
 ) -> dict[str, float | int]:
     if device_name == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif (
+            getattr(torch.backends, "mps", None) is not None
+            and torch.backends.mps.is_available()
+        ):
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
     else:
         device = torch.device(device_name)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -152,6 +189,8 @@ def generate(
         torch.cuda.manual_seed_all(seed)
 
     model, vocab, max_len = load_model(checkpoint, device)
+    if batch_size == 0:
+        batch_size = default_sampling_batch_size(device)
     token_sequences = sample_tokens(
         model,
         vocab,
@@ -163,6 +202,8 @@ def generate(
         top_p=top_p,
         device=device,
     )
+    if conformer_workers == 0:
+        conformer_workers = default_conformer_workers(len(token_sequences))
     return write_conformers(
         token_sequences,
         output,

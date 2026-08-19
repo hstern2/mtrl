@@ -16,8 +16,10 @@ uv run mtrl generate /path/to/best.pt -n 100 > conformers.sdf
 
 Only SDF is written to stdout, with each record flushed as it is completed.
 Each record includes the emitted AMSR string as a property. Transformer
-sampling uses GPU batches of 256 by default; conformer construction uses up to
-16 CPU workers. Parallel records are emitted in completion order;
+sampling selects a conservative batch from available device memory, capped at
+256; conformer construction respects CPU affinity, workload size, and a
+16-worker cap. Override either with `--batch-size` or `--conformer-workers`.
+Parallel records are emitted in completion order;
 `MTRL_SAMPLE_INDEX` preserves sampling order. A stringent AMSR decode and
 successful conformer construction are the only requirements for inclusion.
 
