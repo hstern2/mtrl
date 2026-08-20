@@ -238,6 +238,15 @@ def rl(
         ),
         rich_help_panel="RL training",
     ),
+    seed: int | None = typer.Option(
+        None,
+        help=(
+            "Random seed for sampling and RL initialization; provide an integer to "
+            "reproduce a run, or omit it to choose a new seed each run"
+        ),
+        show_default="random each run",
+        rich_help_panel="RL training",
+    ),
     replay_fraction: float = typer.Option(0.0, hidden=True),
     precision: str = typer.Option(
         "auto",
@@ -249,9 +258,15 @@ def rl(
     ),
     checkpoint_every: int = typer.Option(
         100,
+        help=("Save rl_step_N.pt every N iterations; 0 disables intermediate saves"),
+        rich_help_panel="Output and logging",
+    ),
+    save_final_checkpoint: bool = typer.Option(
+        True,
+        "--save-final-checkpoint/--no-save-final-checkpoint",
         help=(
-            "Save rl_step_N.pt every N iterations; 0 disables intermediate saves, "
-            "but rl_final.pt is always written"
+            "Write rl_final.pt after the last iteration; disable this for independent "
+            "generation screens that only need molecules and scores"
         ),
         rich_help_panel="Output and logging",
     ),
@@ -312,6 +327,10 @@ def rl(
         raise typer.BadParameter(
             f"--batch-size={batch_size} must be divisible by WORLD_SIZE={world_size}"
         )
+    if seed is None:
+        seed = secrets.randbits(63)
+    if seed < 0 or seed >= 2**63:
+        raise typer.BadParameter("--seed must be in [0, 2^63)")
     output_dir = output_dir.resolve()
     rank = int(os.environ.get("RANK", "0"))
     if rank == 0 and output_dir.exists():
@@ -335,6 +354,27 @@ def rl(
         (output_dir / "scoring_config.json").write_text(
             json.dumps(config.to_dict(), indent=2, sort_keys=True) + "\n"
         )
+        (output_dir / "run_config.json").write_text(
+            json.dumps(
+                {
+                    "batch_size": batch_size,
+                    "checkpoint": str(checkpoint.resolve()),
+                    "checkpoint_every": checkpoint_every,
+                    "iterations": iterations,
+                    "kl_beta": kl_beta,
+                    "lr": lr,
+                    "pareto_lambda": pareto_lambda,
+                    "precision": precision,
+                    "save_final_checkpoint": save_final_checkpoint,
+                    "seed": seed,
+                    "temperature": temperature,
+                    "temperature_final": temperature_final,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
 
     rl_train(
         checkpoint_path=str(checkpoint),
@@ -350,7 +390,9 @@ def rl(
         replay_fraction=replay_fraction,
         precision=precision,
         checkpoint_every=checkpoint_every,
+        save_final_checkpoint=save_final_checkpoint,
         log_every=log_every,
         checkpoint_dir=str(output_dir),
         wandb_project=wandb_project,
+        seed=seed,
     )

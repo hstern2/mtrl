@@ -801,7 +801,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
     { name = "torch", marker = "sys_platform != 'darwin'", specifier = ">=2.4,<3", index = "https://download.pytorch.org/whl/cu121" },
     { name = "torch", marker = "sys_platform == 'darwin'", specifier = ">=2.4,<3" },
-    { name = "trl", git = "https://github.com/hstern2/trl?rev=a99df8825fd023dcef299061efcdb78a0748a598" },
+    { name = "trl", git = "https://github.com/hstern2/trl?rev=9396a2b44e608cd62b2e4c84522f7a8cc5966a31" },
     { name = "typer", specifier = ">=0.9" },
 ]
 provides-extras = ["dev"]
@@ -2126,7 +2126,7 @@ wheels = [
 [[package]]
 name = "trl"
 version = "0.1.0"
-source = { git = "https://github.com/hstern2/trl?rev=a99df8825fd023dcef299061efcdb78a0748a598#a99df8825fd023dcef299061efcdb78a0748a598" }
+source = { git = "https://github.com/hstern2/trl?rev=9396a2b44e608cd62b2e4c84522f7a8cc5966a31#9396a2b44e608cd62b2e4c84522f7a8cc5966a31" }
 dependencies = [
     { name = "numpy" },
     { name = "orjson" },

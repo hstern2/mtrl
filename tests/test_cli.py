@@ -1,3 +1,5 @@
+import json
+
 from typer.testing import CliRunner
 
 from mtrl.cli import _CLI_BATCH_SIZE, _CLI_CONFORMER_WORKERS, app
@@ -45,13 +47,14 @@ def test_rl_help_explains_training_and_output_options() -> None:
         "starting checkpoint",
         "Pareto rank alone",
         "temperature changes linearly",
+        "new seed each run",
         "V100-era CUDA GPUs",
         "rl_final.pt",
-        "always written",
+        "generation screens",
         "Empty directory",
         "Pareto SDFs",
         "scores.jsonl",
-        "W&B logging",
+        "Weights & Biases",
     ):
         assert explanation in help_text
 
@@ -116,3 +119,46 @@ def test_rl_refuses_to_mix_results_in_a_nonempty_output_directory(tmp_path) -> N
 
     assert result.exit_code == 2
     assert "--output-dir must be empty" in result.stderr
+
+
+def test_rl_chooses_and_records_random_seed(tmp_path, monkeypatch) -> None:
+    checkpoint = tmp_path / "model.pt"
+    receptor = tmp_path / "receptor.pdb"
+    reference = tmp_path / "reference.sdf"
+    output = tmp_path / "output"
+    checkpoint.touch()
+    receptor.touch()
+    reference.touch()
+    received = {}
+
+    monkeypatch.setattr("mtrl.cli.secrets.randbits", lambda bits: 8675309)
+
+    def fake_rl_train(**kwargs):
+        received.update(kwargs)
+
+    monkeypatch.setattr("trl.training.rl_train.rl_train", fake_rl_train)
+    result = CliRunner().invoke(
+        app,
+        [
+            "rl",
+            str(checkpoint),
+            "--receptor-pdb",
+            str(receptor),
+            "--reference-sdf",
+            str(reference),
+            "--output-dir",
+            str(output),
+            "--iterations",
+            "1",
+            "--checkpoint-every",
+            "0",
+            "--no-save-final-checkpoint",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert received["seed"] == 8675309
+    assert received["save_final_checkpoint"] is False
+    run_config = json.loads((output / "run_config.json").read_text())
+    assert run_config["seed"] == 8675309
+    assert run_config["save_final_checkpoint"] is False
