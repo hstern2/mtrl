@@ -15,9 +15,7 @@ from mtrl.hardware import default_conformer_workers
     ("free_gib", "expected"),
     [(12.0, 256), (8.0, 128), (4.0, 64), (2.0, 32)],
 )
-def test_auto_sampling_batch_uses_free_device_memory(
-    free_gib, expected, monkeypatch
-) -> None:
+def test_auto_sampling_batch_uses_free_device_memory(free_gib, expected, monkeypatch) -> None:
     gib = 1024**3
     monkeypatch.setattr(
         torch.cuda,

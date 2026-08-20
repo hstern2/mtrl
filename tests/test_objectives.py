@@ -35,17 +35,16 @@ def _decoded(smiles: str) -> DecodedAMSR:
     return DecodedAMSR(Chem.MolFromSmiles(smiles), {})
 
 
-def _config(*, lilly: bool = False) -> ScoringConfig:
+def _config(output_dir: Path, *, lilly: bool = False) -> ScoringConfig:
     return ScoringConfig(
         receptor_pdb=Path("receptor.pdb"),
         reference_sdf=Path("reference.sdf"),
-        work_dir=Path("work"),
+        output_dir=output_dir,
         lilly_medchem_rules=lilly,
-        record_scores=False,
     )
 
 
-def test_only_accepted_structures_receive_the_two_pareto_scores() -> None:
+def test_only_accepted_structures_receive_the_two_pareto_scores(tmp_path) -> None:
     decoded = [_decoded("CCCCCCCC"), _decoded("c1ccccc1"), None]
     pipeline = FakePipeline(
         [
@@ -59,7 +58,7 @@ def test_only_accepted_structures_receive_the_two_pareto_scores() -> None:
         ]
     )
     suite = DockingObjectives(
-        _config(),
+        _config(tmp_path),
         decode_fn=lambda tokens: decoded[int(tokens[0])],
         conformer_fn=lambda candidate: candidate.mol,
         pipeline=pipeline,
@@ -86,7 +85,7 @@ def test_only_accepted_structures_receive_the_two_pareto_scores() -> None:
     assert np.array_equal(rewards[1:], np.zeros(2))
 
 
-def test_lilly_runs_before_conformer_construction_and_structure_scoring() -> None:
+def test_lilly_runs_before_conformer_construction_and_structure_scoring(tmp_path) -> None:
     decoded = [_decoded("CCCCCCCC"), _decoded("c1ccccc1C")]
     lilly = FakeLilly([False, True])
     built = []
@@ -95,6 +94,7 @@ def test_lilly_runs_before_conformer_construction_and_structure_scoring() -> Non
             StructureScore(
                 cnn_affinity=6.0,
                 roshambo_tanimoto_combo=0.5,
+                minimized_rmsd=0.3,
                 accepted=True,
             )
         ]
@@ -105,7 +105,7 @@ def test_lilly_runs_before_conformer_construction_and_structure_scoring() -> Non
         return candidate.mol
 
     suite = DockingObjectives(
-        _config(lilly=True),
+        _config(tmp_path, lilly=True),
         decode_fn=lambda tokens: decoded[int(tokens[0])],
         conformer_fn=make_conformer,
         pipeline=pipeline,
@@ -121,10 +121,10 @@ def test_lilly_runs_before_conformer_construction_and_structure_scoring() -> Non
     assert scored[1].valid
 
 
-def test_disconnected_molecules_are_rejected_before_scoring() -> None:
+def test_disconnected_molecules_are_rejected_before_scoring(tmp_path) -> None:
     pipeline = FakePipeline([])
     suite = DockingObjectives(
-        _config(),
+        _config(tmp_path),
         decode_fn=lambda tokens: _decoded("CC.CC"),
         conformer_fn=lambda candidate: candidate.mol,
         pipeline=pipeline,
@@ -135,6 +135,7 @@ def test_disconnected_molecules_are_rejected_before_scoring() -> None:
     assert not scored[0].valid
     assert scored[0].rejection_reason == "molecule is disconnected"
     assert pipeline.seen == []
+    assert not list((tmp_path / "best").glob("*.sdf"))
 
 
 def test_score_audit_records_accepted_scores_and_rejections(tmp_path) -> None:
@@ -142,8 +143,7 @@ def test_score_audit_records_accepted_scores_and_rejections(tmp_path) -> None:
     config = ScoringConfig(
         receptor_pdb=Path("receptor.pdb"),
         reference_sdf=Path("reference.sdf"),
-        work_dir=tmp_path,
-        record_scores=True,
+        output_dir=tmp_path,
     )
     pipeline = FakePipeline(
         [
@@ -164,11 +164,114 @@ def test_score_audit_records_accepted_scores_and_rejections(tmp_path) -> None:
 
     suite.evaluate([["0"], ["1"]])
 
-    records = [
-        json.loads(line) for line in (tmp_path / "rank_0" / "scores.jsonl").read_text().splitlines()
-    ]
+    records = [json.loads(line) for line in (tmp_path / "scores.jsonl").read_text().splitlines()]
     assert records[0]["accepted"] is True
-    assert records[0]["gnina_cnn_affinity"] == pytest.approx(7.1)
+    assert records[0]["cnn_affinity"] == pytest.approx(7.1)
+    assert records[0]["tanimoto_combo"] == pytest.approx(0.7)
+    assert "scores" not in records[0]
     assert records[0]["minimized_rmsd"] == pytest.approx(0.25)
     assert records[1]["accepted"] is False
     assert records[1]["rejection_reason"] == "AMSR decode failed"
+
+
+def test_generation_and_overall_sdfs_contain_complete_pareto_fronts(tmp_path) -> None:
+    smiles = {"0": "CC", "1": "CCC", "2": "CCCC", "3": "CCO", "4": "CCN"}
+    pipeline = FakePipeline(
+        [
+            StructureScore(
+                cnn_affinity=8.0,
+                roshambo_tanimoto_combo=0.5,
+                minimized_rmsd=0.2,
+                accepted=True,
+            ),
+            StructureScore(
+                cnn_affinity=7.0,
+                roshambo_tanimoto_combo=0.8,
+                minimized_rmsd=0.3,
+                accepted=True,
+            ),
+            StructureScore(
+                cnn_affinity=6.0,
+                roshambo_tanimoto_combo=0.4,
+                minimized_rmsd=0.4,
+                accepted=True,
+            ),
+        ]
+    )
+    suite = DockingObjectives(
+        _config(tmp_path),
+        decode_fn=lambda tokens: _decoded(smiles[tokens[0]]),
+        conformer_fn=lambda candidate: candidate.mol,
+        pipeline=pipeline,
+    )
+
+    suite.evaluate([["0"], ["1"], ["2"]])
+
+    generation_one = [
+        mol
+        for mol in Chem.SDMolSupplier(
+            str(tmp_path / "best" / "generation_000001.sdf"), removeHs=False
+        )
+        if mol is not None
+    ]
+    assert len(generation_one) == 2
+    assert {mol.GetProp("AMSR") for mol in generation_one} == {"0", "1"}
+
+    pipeline.results = [
+        StructureScore(
+            cnn_affinity=8.5,
+            roshambo_tanimoto_combo=0.6,
+            minimized_rmsd=0.2,
+            accepted=True,
+        ),
+        StructureScore(
+            cnn_affinity=6.5,
+            roshambo_tanimoto_combo=0.9,
+            minimized_rmsd=0.3,
+            accepted=True,
+        ),
+    ]
+    suite.evaluate([["3"], ["4"]])
+
+    generation_two = [
+        mol
+        for mol in Chem.SDMolSupplier(
+            str(tmp_path / "best" / "generation_000002.sdf"), removeHs=False
+        )
+        if mol is not None
+    ]
+    overall = [
+        mol
+        for mol in Chem.SDMolSupplier(str(tmp_path / "best" / "overall.sdf"), removeHs=False)
+        if mol is not None
+    ]
+    assert len(generation_two) == 2
+    assert {mol.GetProp("AMSR") for mol in overall} == {"1", "3", "4"}
+    for mol in overall:
+        assert mol.HasProp("CNNaffinity")
+        assert mol.HasProp("tanimoto_combo")
+        assert mol.HasProp("minimized_rmsd")
+    output_files = {
+        path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*") if path.is_file()
+    }
+    assert output_files == {
+        "best/generation_000001.sdf",
+        "best/generation_000002.sdf",
+        "best/overall.sdf",
+        "scores.jsonl",
+    }
+
+
+def test_multi_gpu_output_is_gathered_before_writing(monkeypatch) -> None:
+    local = {"scores": [{"rank": 0}], "accepted": []}
+    remote = {"scores": [{"rank": 1}], "accepted": []}
+
+    monkeypatch.setattr("mtrl.objectives.torch.distributed.is_initialized", lambda: True)
+    monkeypatch.setattr("mtrl.objectives.torch.distributed.get_world_size", lambda: 2)
+
+    def gather(output, payload):
+        output[:] = [payload, remote]
+
+    monkeypatch.setattr("mtrl.objectives.torch.distributed.all_gather_object", gather)
+
+    assert DockingObjectives._gather_output(local) == [local, remote]

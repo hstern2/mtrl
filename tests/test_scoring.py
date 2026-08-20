@@ -45,16 +45,19 @@ def test_minimized_pose_rmsd_is_in_place_and_heavy_atom_only() -> None:
     ],
 )
 def test_structure_pipeline_hard_gates(
-    tmp_path, movement, posebusters_passed, accepted, reason
+    tmp_path, monkeypatch, movement, posebusters_passed, accepted, reason
 ) -> None:
     receptor = tmp_path / "receptor.pdb"
     reference = tmp_path / "reference.sdf"
     receptor.write_text("END\n")
     _write(reference, _mol3d())
+    scratch = tmp_path / "system-temp"
+    scratch.mkdir()
+    monkeypatch.setattr("tempfile.tempdir", str(scratch))
     config = ScoringConfig(
         receptor_pdb=receptor,
         reference_sdf=reference,
-        work_dir=tmp_path / "work",
+        output_dir=tmp_path / "output",
         max_minimized_rmsd=1.0,
     )
 
@@ -90,3 +93,5 @@ def test_structure_pipeline_hard_gates(
     assert score.roshambo_tanimoto_combo == pytest.approx(0.77)
     assert score.minimized_rmsd == pytest.approx(movement, abs=1e-4)
     assert reason in score.rejection_reason
+    assert (score.minimized_mol is not None) is accepted
+    assert not any(scratch.iterdir())

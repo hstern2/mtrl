@@ -13,12 +13,10 @@ CONFIG_ENV = "MTRL_SCORING_CONFIG"
 class ScoringConfig:
     receptor_pdb: Path
     reference_sdf: Path
-    work_dir: Path
+    output_dir: Path
     max_minimized_rmsd: float = 1.0
     lilly_medchem_rules: bool = False
     lilly_rules_executable: str = "Lilly_Medchem_Rules.rb"
-    keep_poses: bool = False
-    record_scores: bool = True
     verbose_tools: bool = False
 
     def validate(self) -> None:
@@ -31,7 +29,7 @@ class ScoringConfig:
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
-        for key in ("receptor_pdb", "reference_sdf", "work_dir"):
+        for key in ("receptor_pdb", "reference_sdf", "output_dir"):
             result[key] = str(result[key])
         return result
 
@@ -48,7 +46,7 @@ class ScoringConfig:
                 "structure-scoring inputs are configured"
             )
         values = json.loads(encoded)
-        for key in ("receptor_pdb", "reference_sdf", "work_dir"):
+        for key in ("receptor_pdb", "reference_sdf", "output_dir"):
             values[key] = Path(values[key])
         config = cls(**values)
         config.validate()

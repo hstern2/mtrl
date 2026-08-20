@@ -20,19 +20,44 @@ app = typer.Typer(
 
 @app.command()
 def generate(
-    checkpoint: Path = typer.Argument(..., exists=True, dir_okay=False),
-    n: int = typer.Option(100, "-n", help="Number of AMSR strings to sample"),
+    checkpoint: Path = typer.Argument(
+        ...,
+        exists=True,
+        dir_okay=False,
+        help="Pretrained AMSR checkpoint (.pt) to sample from",
+    ),
+    n: int = typer.Option(
+        100,
+        "-n",
+        help=(
+            "Number of AMSR strings to sample; fewer SDF records may be written "
+            "if decoding or conformer construction fails"
+        ),
+        rich_help_panel="Sampling",
+    ),
     batch_size: int = typer.Option(
         _CLI_BATCH_SIZE,
-        help="AMSR strings sampled together on the selected device",
+        help=(
+            "AMSR strings sampled together on the selected device; larger batches "
+            "are usually faster but require more device memory"
+        ),
+        rich_help_panel="Sampling",
     ),
     conformer_workers: int = typer.Option(
         _CLI_CONFORMER_WORKERS,
-        help="Parallel CPU conformer workers",
+        help=(
+            "CPU processes used to decode sampled AMSR strings into 3D conformers; "
+            "larger values use more CPU and memory"
+        ),
+        rich_help_panel="Conformer construction",
     ),
     temperature: float = typer.Option(
         0.8,
-        help="Randomness: lower is more conservative; higher gives more variety",
+        help=(
+            "Sampling randomness at each token: lower favors the model's most likely "
+            "choices; higher increases variety and usually increases invalid output"
+        ),
+        rich_help_panel="Sampling",
     ),
     top_k: int = typer.Option(
         0,
@@ -40,6 +65,7 @@ def generate(
             "Maximum number of likely choices kept for each next AMSR token; "
             "0 means no limit and is usually appropriate"
         ),
+        rich_help_panel="Sampling",
     ),
     top_p: float = typer.Option(
         1.0,
@@ -47,13 +73,25 @@ def generate(
             "Keep enough likely choices for each next AMSR token to cover this "
             "probability fraction; 1.0 means no restriction and is usually appropriate"
         ),
+        rich_help_panel="Sampling",
     ),
     seed: int | None = typer.Option(
         None,
-        help="Random seed; provide an integer to reproduce a run",
+        help=(
+            "Random seed for token sampling; provide an integer to reproduce a run, "
+            "or omit it to choose a new seed each run"
+        ),
         show_default="random each run",
+        rich_help_panel="Sampling",
     ),
-    device: str = typer.Option("auto", help="auto, cpu, cuda, or a CUDA device such as cuda:0"),
+    device: str = typer.Option(
+        "auto",
+        help=(
+            "Device used for transformer sampling: auto selects CUDA when available; "
+            "otherwise use cpu, cuda, or a specific device such as cuda:0"
+        ),
+        rich_help_panel="Sampling",
+    ),
 ) -> None:
     """Sample AMSR strings and decode their encoded 3D conformers without scoring."""
     from mtrl.generate import generate as generate_conformers
@@ -90,77 +128,209 @@ def generate(
         raise typer.BadParameter(str(error)) from error
 
 
-
 @app.command()
 def rl(
-    checkpoint: Path = typer.Argument(..., exists=True, dir_okay=False),
-    receptor_pdb: Path = typer.Option(..., "--receptor-pdb", exists=True, dir_okay=False),
-    reference_sdf: Path = typer.Option(..., "--reference-sdf", exists=True, dir_okay=False),
+    checkpoint: Path = typer.Argument(
+        ...,
+        exists=True,
+        dir_okay=False,
+        help=(
+            "Pretrained AMSR checkpoint (.pt) used as both the initial policy and "
+            "the frozen KL-reference model"
+        ),
+    ),
+    receptor_pdb: Path = typer.Option(
+        ...,
+        "--receptor-pdb",
+        exists=True,
+        dir_okay=False,
+        help="Target receptor passed to GNINA and receptor-aware PoseBusters checks",
+        rich_help_panel="Scoring inputs",
+    ),
+    reference_sdf: Path = typer.Option(
+        ...,
+        "--reference-sdf",
+        exists=True,
+        dir_okay=False,
+        help=("3D reference ligand used for Roshambo2 alignment and as GNINA's minimization box"),
+        rich_help_panel="Scoring inputs",
+    ),
     max_minimized_rmsd: float = typer.Option(
         1.0,
         "--max-minimized-rmsd",
-        help="Reject when the aligned-to-minimized heavy-atom RMSD exceeds this value (A)",
+        help=(
+            "Reject if GNINA moves the Roshambo2-aligned pose by more than this "
+            "symmetry-corrected heavy-atom RMSD, in Angstrom; poses are not realigned"
+        ),
+        rich_help_panel="Molecule gates",
     ),
     lilly_medchem_rules: bool = typer.Option(
         False,
         "--lilly-medchem-rules/--no-lilly-medchem-rules",
-        help="Apply Lilly Medchem Rules in -relaxed mode before structure scoring",
+        help=(
+            "Apply Lilly Medchem Rules in -relaxed mode before costly 3D scoring; "
+            "failures receive no reward"
+        ),
+        rich_help_panel="Molecule gates",
     ),
     lilly_rules_executable: str = typer.Option(
         "Lilly_Medchem_Rules.rb",
         "--lilly-rules-executable",
+        help=(
+            "Command name or path for Lilly_Medchem_Rules.rb; used only when "
+            "--lilly-medchem-rules is enabled"
+        ),
+        rich_help_panel="Molecule gates",
     ),
-    iterations: int = typer.Option(1000),
-    batch_size: int = typer.Option(16, help="Total generated molecules per RL iteration"),
-    lr: float = typer.Option(1e-5),
-    kl_beta: float = typer.Option(0.05),
-    pareto_lambda: float = typer.Option(0.1),
-    temperature: float = typer.Option(1.0),
-    temperature_final: float = typer.Option(0.8),
+    iterations: int = typer.Option(
+        1000,
+        help=(
+            "Number of sample-score-update cycles; total generated molecules are "
+            "iterations multiplied by batch size"
+        ),
+        rich_help_panel="RL training",
+    ),
+    batch_size: int = typer.Option(
+        16,
+        help=(
+            "Total molecules generated per RL iteration across all GPUs; must be "
+            "divisible by WORLD_SIZE"
+        ),
+        rich_help_panel="RL training",
+    ),
+    lr: float = typer.Option(
+        1e-5,
+        help=(
+            "Peak AdamW learning rate; the schedule warms up for 100 iterations, "
+            "then decays to zero"
+        ),
+        rich_help_panel="RL training",
+    ),
+    kl_beta: float = typer.Option(
+        0.05,
+        help=(
+            "Penalty for moving away from the starting checkpoint; higher values "
+            "keep the policy closer, while 0 disables the KL penalty"
+        ),
+        rich_help_panel="RL training",
+    ),
+    pareto_lambda: float = typer.Option(
+        0.1,
+        help=(
+            "Diversity bonus within each affinity/shape Pareto front; 0 uses Pareto "
+            "rank alone, while larger values favor a wider tradeoff spread"
+        ),
+        rich_help_panel="RL training",
+    ),
+    temperature: float = typer.Option(
+        1.0,
+        help=(
+            "Sampling temperature at the start of RL; higher values explore more "
+            "and usually produce more invalid molecules"
+        ),
+        rich_help_panel="RL training",
+    ),
+    temperature_final: float = typer.Option(
+        0.8,
+        help=(
+            "Sampling temperature at the end of RL; temperature changes linearly "
+            "from --temperature to this value"
+        ),
+        rich_help_panel="RL training",
+    ),
     replay_fraction: float = typer.Option(0.0, hidden=True),
-    precision: str = typer.Option("auto", help="Precision: auto, fp32, fp16, or bf16"),
-    checkpoint_every: int = typer.Option(100),
-    log_every: int = typer.Option(10),
-    checkpoint_dir: Path = typer.Option(Path("checkpoints_rl/")),
-    work_dir: Path | None = typer.Option(None),
-    keep_poses: bool = typer.Option(False, help="Keep accepted aligned/minimized SDF pairs"),
-    record_scores: bool = typer.Option(
-        True, help="Record every generated AMSR string, score, and rejection reason"
+    precision: str = typer.Option(
+        "auto",
+        help=(
+            "Training precision: auto uses FP16 on V100-era CUDA GPUs, BF16 on "
+            "Ampere or newer, and FP32 on CPU; explicit choices are fp32/fp16/bf16"
+        ),
+        rich_help_panel="RL training",
     ),
-    verbose_tools: bool = typer.Option(False, help="Show Roshambo2, GNINA, and PoseBusters output"),
-    wandb_project: str | None = typer.Option(None),
+    checkpoint_every: int = typer.Option(
+        100,
+        help=(
+            "Save rl_step_N.pt every N iterations; 0 disables intermediate saves, "
+            "but rl_final.pt is always written"
+        ),
+        rich_help_panel="Output and logging",
+    ),
+    log_every: int = typer.Option(
+        10,
+        help="Print reward, validity, KL, objective, and rejection summaries every N iterations",
+        rich_help_panel="Output and logging",
+    ),
+    output_dir: Path = typer.Option(
+        Path("mtrl_output/"),
+        "--output-dir",
+        help=(
+            "Empty directory for best/ Pareto SDFs, scores.jsonl, the run config, "
+            "and RL checkpoints"
+        ),
+        rich_help_panel="Output and logging",
+    ),
+    verbose_tools: bool = typer.Option(
+        False,
+        help=(
+            "Show Roshambo2, GNINA, and PoseBusters output; by default their routine "
+            "output is suppressed"
+        ),
+        rich_help_panel="Output and logging",
+    ),
+    wandb_project: str | None = typer.Option(
+        None,
+        help="Weights & Biases project name; omit to disable W&B logging",
+        rich_help_panel="Output and logging",
+    ),
 ) -> None:
     """Pareto RL using GNINA affinity and Roshambo2 shape/color similarity."""
     from trl.training.rl_train import rl_train
 
     from mtrl.config import ScoringConfig
 
-    if iterations <= 0:
-        raise typer.BadParameter("--iterations must be > 0")
-    if batch_size <= 0:
-        raise typer.BadParameter("--batch-size must be > 0")
+    for name, value in (
+        ("--max-minimized-rmsd", max_minimized_rmsd),
+        ("--iterations", iterations),
+        ("--batch-size", batch_size),
+        ("--lr", lr),
+        ("--temperature", temperature),
+        ("--temperature-final", temperature_final),
+        ("--log-every", log_every),
+    ):
+        if value <= 0:
+            raise typer.BadParameter(f"{name} must be > 0")
+    for name, value in (
+        ("--kl-beta", kl_beta),
+        ("--pareto-lambda", pareto_lambda),
+        ("--checkpoint-every", checkpoint_every),
+    ):
+        if value < 0:
+            raise typer.BadParameter(f"{name} must be >= 0")
 
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     if batch_size % world_size:
         raise typer.BadParameter(
             f"--batch-size={batch_size} must be divisible by WORLD_SIZE={world_size}"
         )
-    output_dir = checkpoint_dir.resolve()
-    scoring_work_dir = (work_dir or (output_dir / "scoring")).resolve()
+    output_dir = output_dir.resolve()
+    rank = int(os.environ.get("RANK", "0"))
+    if rank == 0 and output_dir.exists():
+        if not output_dir.is_dir():
+            raise typer.BadParameter(f"--output-dir is not a directory: {output_dir}")
+        if any(output_dir.iterdir()):
+            raise typer.BadParameter(f"--output-dir must be empty: {output_dir}")
     config = ScoringConfig(
         receptor_pdb=receptor_pdb.resolve(),
         reference_sdf=reference_sdf.resolve(),
-        work_dir=scoring_work_dir,
+        output_dir=output_dir,
         max_minimized_rmsd=max_minimized_rmsd,
         lilly_medchem_rules=lilly_medchem_rules,
         lilly_rules_executable=lilly_rules_executable,
-        keep_poses=keep_poses,
-        record_scores=record_scores,
         verbose_tools=verbose_tools,
     )
     config.install()
 
-    if int(os.environ.get("RANK", "0")) == 0:
+    if rank == 0:
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "scoring_config.json").write_text(
             json.dumps(config.to_dict(), indent=2, sort_keys=True) + "\n"
@@ -184,43 +354,3 @@ def rl(
         checkpoint_dir=str(output_dir),
         wandb_project=wandb_project,
     )
-
-
-@app.command()
-def evaluate(
-    checkpoint: str = typer.Argument(...),
-    vocab: str = typer.Option("vocab.json"),
-    n: int = typer.Option(1000),
-    output_dir: str = typer.Option("eval_results/"),
-) -> None:
-    """Sample from a checkpoint, decode, and compute validity/uniqueness/novelty."""
-    import torch
-    from trl.data.vocab import Vocab
-    from trl.generation.sampler import sample
-    from trl.model.transformer import TransformerConfig, TransformerLM
-
-    from mtrl.metrics import novelty_rate, uniqueness_rate, validity_rate
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    v = Vocab.load(vocab)
-
-    config = TransformerConfig(**ckpt["config"])
-    model = TransformerLM(config).to(device)
-    model.load_state_dict(ckpt["model"])
-
-    sequences = sample(model, n, device=device)
-    token_seqs = [v.decode(seq) for seq in sequences]
-
-    out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-
-    val = validity_rate(token_seqs)
-    uniq = uniqueness_rate(token_seqs)
-    nov = novelty_rate(token_seqs, set())
-
-    results = {"n": n, "validity": val, "uniqueness": uniq, "novelty": nov}
-    (out / "metrics.json").write_text(json.dumps(results, indent=2))
-
-    typer.echo(f"Validity: {val:.2%}  Uniqueness: {uniq:.2%}  Novelty: {nov:.2%}")
-    typer.echo(f"Results saved to {output_dir}")

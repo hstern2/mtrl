@@ -61,12 +61,15 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
   --reference-sdf reference_ligand.sdf \
   --lilly-medchem-rules \
   --max-minimized-rmsd 1.0 \
-  --checkpoint-dir run_rl
+  --output-dir run_rl
 ```
 
 The default batch is 16 molecules and the default run is 1,000 iterations.
-`run_rl/scoring_config.json` records the exact scoring configuration. Set
-`--keep-poses` to retain accepted aligned/minimized SDF pairs. Every generated
-string, score, RMSD, and rejection reason is recorded under
-`run_rl/scoring/rank_*/scores.jsonl`. External-tool chatter is hidden unless
+`run_rl/best/generation_NNNNNN.sdf` contains a generation's accepted Pareto
+front; generations with no accepted molecules have no SDF. `run_rl/best/overall.sdf`
+is the front across the whole run. Every generated string, score, RMSD, and
+rejection reason is in `run_rl/scores.jsonl`.
+`scoring_config.json` and the RL checkpoints are also written directly under
+`run_rl/`. Temporary scoring files use the system temporary directory and are
+removed after each molecule. External-tool chatter is hidden unless
 `--verbose-tools` is set.

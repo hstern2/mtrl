@@ -11,7 +11,7 @@ build/
 .venv/
 .env
 wandb/
-eval_results/
+mtrl_output/
 *.pt
 *.pth
 *.bin

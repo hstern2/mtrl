@@ -13,7 +13,6 @@ from trl.generation.sampler import sample
 from trl.model.transformer import TransformerConfig, TransformerLM
 
 from mtrl import detokenize
-from mtrl.conformer import build_conformer
 from mtrl.hardware import default_conformer_workers, sampling_batch_from_free_gib
 
 
@@ -118,7 +117,7 @@ def write_conformers(
         else:
             context = multiprocessing.get_context("spawn")
             with ProcessPoolExecutor(max_workers=workers, mp_context=context) as pool:
-                conformers = pool.map(build_conformer, token_sequences, chunksize=1)
+                conformers = pool.map(detokenize, token_sequences, chunksize=1)
                 for sample_index, (tokens, mol) in enumerate(
                     zip(token_sequences, conformers, strict=True)
                 ):
@@ -152,10 +151,7 @@ def generate(
     if device_name == "auto":
         if torch.cuda.is_available():
             device = torch.device("cuda")
-        elif (
-            getattr(torch.backends, "mps", None) is not None
-            and torch.backends.mps.is_available()
-        ):
+        elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
             device = torch.device("mps")
         else:
             device = torch.device("cpu")

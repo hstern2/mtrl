@@ -7,7 +7,8 @@ name = "mtrl"
 version = "0.1.0"
 description = "AMSR molecular generation and reinforcement learning"
 authors = [{ name = "Harry Stern" }]
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -42,7 +43,7 @@ required-environments = [
 ]
 
 [tool.uv.sources]
-trl = { git = "https://github.com/hstern2/trl", rev = "adb918e2fc448df91b98eb563e4ba8736d3188d9" }
+trl = { git = "https://github.com/hstern2/trl", rev = "a99df8825fd023dcef299061efcdb78a0748a598" }
 amsr = { git = "https://github.com/hstern2/amsr", rev = "3a934c45d81bf56e0bf7aa5176898ad2214959c6" }
 torch = [
     { index = "pytorch-cu121", marker = "sys_platform != 'darwin'" },

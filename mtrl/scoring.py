@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -25,6 +24,7 @@ class StructureScore:
     minimized_rmsd: float | None = None
     accepted: bool = False
     rejection_reason: str = ""
+    minimized_mol: Mol | None = None
 
 
 def minimized_pose_rmsd(aligned: Mol, minimized: Mol) -> float:
@@ -71,8 +71,6 @@ class StructureScoringPipeline:
         self.rank = int(os.environ.get("RANK", "0"))
         self.local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         self.batch_number = 0
-        self.rank_work_dir = config.work_dir / f"rank_{self.rank}"
-        self.rank_work_dir.mkdir(parents=True, exist_ok=True)
         roshambo.require()
         gnina.require()
         busters.require()
@@ -88,7 +86,7 @@ class StructureScoringPipeline:
         if mol.GetNumConformers() == 0 or not mol.GetConformer().Is3D():
             return StructureScore(rejection_reason="AMSR conformer is missing 3D coordinates")
 
-        with TemporaryDirectory(prefix=f"{name}_", dir=self.rank_work_dir) as temporary:
+        with TemporaryDirectory(prefix=f"mtrl_{name}_") as temporary:
             work = Path(temporary)
             candidate_sdf = work / "candidate.sdf"
             aligned_sdf = work / "aligned.sdf"
@@ -104,7 +102,7 @@ class StructureScoringPipeline:
                     return StructureScore(rejection_reason="Roshambo2 score is missing")
 
                 aligned = read_mol(aligned_sdf)
-                shutil.copy2(aligned_sdf, minimized_sdf)
+                _write_mol(minimized_sdf, aligned, name)
                 self._run_gnina(minimized_sdf)
                 minimized_before_busters = read_mol(minimized_sdf)
                 rmsd = minimized_pose_rmsd(aligned, minimized_before_busters)
@@ -137,17 +135,12 @@ class StructureScoringPipeline:
                         ),
                     )
 
-                if self.config.keep_poses:
-                    pose_dir = self.rank_work_dir / "accepted"
-                    pose_dir.mkdir(exist_ok=True)
-                    shutil.copy2(aligned_sdf, pose_dir / f"{name}.aligned.sdf")
-                    shutil.copy2(minimized_sdf, pose_dir / f"{name}.minimized.sdf")
-
                 return StructureScore(
                     cnn_affinity=float(affinity),
                     roshambo_tanimoto_combo=float(combo),
                     minimized_rmsd=rmsd,
                     accepted=True,
+                    minimized_mol=Chem.Mol(minimized_before_busters),
                 )
             except Exception as error:
                 return StructureScore(
