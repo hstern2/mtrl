@@ -44,6 +44,7 @@ def test_rl_help_explains_training_and_output_options() -> None:
         "not realigned",
         "total generated molecules",
         "Peak AdamW learning rate",
+        "short RL runs",
         "starting checkpoint",
         "Pareto rank alone",
         "temperature changes linearly",
@@ -158,7 +159,9 @@ def test_rl_chooses_and_records_random_seed(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert received["seed"] == 8675309
+    assert received["warmup_steps"] == 100
     assert received["save_final_checkpoint"] is False
     run_config = json.loads((output / "run_config.json").read_text())
     assert run_config["seed"] == 8675309
+    assert run_config["warmup_steps"] == 100
     assert run_config["save_final_checkpoint"] is False

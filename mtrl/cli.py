@@ -206,6 +206,11 @@ def rl(
         ),
         rich_help_panel="RL training",
     ),
+    warmup_steps: int = typer.Option(
+        100,
+        help=("Number of learning-rate warmup iterations; use a smaller value for short RL runs"),
+        rich_help_panel="RL training",
+    ),
     kl_beta: float = typer.Option(
         0.05,
         help=(
@@ -318,6 +323,7 @@ def rl(
         ("--kl-beta", kl_beta),
         ("--pareto-lambda", pareto_lambda),
         ("--checkpoint-every", checkpoint_every),
+        ("--warmup-steps", warmup_steps),
     ):
         if value < 0:
             raise typer.BadParameter(f"{name} must be >= 0")
@@ -369,6 +375,7 @@ def rl(
                     "seed": seed,
                     "temperature": temperature,
                     "temperature_final": temperature_final,
+                    "warmup_steps": warmup_steps,
                 },
                 indent=2,
                 sort_keys=True,
@@ -383,6 +390,7 @@ def rl(
         iterations=iterations,
         batch_size=batch_size,
         lr=lr,
+        warmup_steps=warmup_steps,
         kl_beta=kl_beta,
         pareto_lambda=pareto_lambda,
         temperature=temperature,
