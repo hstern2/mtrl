@@ -43,7 +43,7 @@ required-environments = [
 
 [tool.uv.sources]
 trl = { git = "https://github.com/hstern2/trl", rev = "adb918e2fc448df91b98eb563e4ba8736d3188d9" }
-amsr = { git = "https://github.com/hstern2/amsr", rev = "aac04ff40256ec3f1c3f2af56be6aa3a0c55c1c0" }
+amsr = { git = "https://github.com/hstern2/amsr", rev = "3a934c45d81bf56e0bf7aa5176898ad2214959c6" }
 torch = [
     { index = "pytorch-cu121", marker = "sys_platform != 'darwin'" },
 ]
