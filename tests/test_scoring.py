@@ -1,12 +1,13 @@
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from rdkit import Chem
+from rdkit import Chem, log_handler
 from rdkit.Chem import AllChem
 
 from mtrl.config import ScoringConfig
-from mtrl.scoring import StructureScoringPipeline, minimized_pose_rmsd
+from mtrl.scoring import StructureScoringPipeline, _quiet_tools, minimized_pose_rmsd
 
 
 def _mol3d() -> Chem.Mol:
@@ -34,6 +35,15 @@ def test_minimized_pose_rmsd_is_in_place_and_heavy_atom_only() -> None:
     aligned = _mol3d()
     moved = _translate(aligned, 0.75)
     assert minimized_pose_rmsd(aligned, moved) == pytest.approx(0.75, abs=1e-6)
+
+
+def test_quiet_tools_restores_rdkit_log_stream() -> None:
+    original_stream = log_handler.stream
+    with _quiet_tools(True):
+        log_handler.setStream(sys.stderr)
+        assert log_handler.stream is not original_stream
+    assert log_handler.stream is original_stream
+    assert not original_stream.closed
 
 
 @pytest.mark.parametrize(

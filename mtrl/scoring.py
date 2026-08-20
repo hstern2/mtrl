@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 
 from lad import busters, gnina, roshambo
 from lad.sdf import extract_scores, extract_tanimoto_combination, read_mol
-from rdkit import Chem, rdBase
+from rdkit import Chem, log_handler, rdBase
 from rdkit.Chem import Mol, rdMolAlign
 
 from mtrl.config import ScoringConfig
@@ -55,8 +55,15 @@ def _quiet_tools(quiet: bool) -> Iterator[None]:
         for logger in loggers:
             logger.disabled = True
         with Path(os.devnull).open("w") as discard, rdBase.BlockLogs():
-            with redirect_stdout(discard), redirect_stderr(discard):
-                yield
+            original_rdkit_stream = log_handler.stream
+            try:
+                with redirect_stdout(discard), redirect_stderr(discard):
+                    yield
+            finally:
+                # PoseBusters temporarily redirects RDKit logging to sys.stderr.
+                # Restore it while ``discard`` is still open so subsequent calls
+                # never inherit a closed stream.
+                log_handler.setStream(original_rdkit_stream)
     finally:
         for logger, was_disabled in zip(loggers, disabled, strict=True):
             logger.disabled = was_disabled
