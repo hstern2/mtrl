@@ -50,7 +50,7 @@ def test_quiet_tools_restores_rdkit_log_stream() -> None:
     ("movement", "posebusters_passed", "accepted", "reason"),
     [
         (0.4, True, True, ""),
-        (1.2, True, False, "minimization RMSD"),
+        (1.2, True, True, ""),
         (0.4, False, False, "PoseBusters failed"),
     ],
 )
@@ -68,10 +68,10 @@ def test_structure_pipeline_hard_gates(
         receptor_pdb=receptor,
         reference_sdf=reference,
         output_dir=tmp_path / "output",
-        max_minimized_rmsd=1.0,
     )
 
-    def fake_roshambo(query, candidate, output):
+    def fake_roshambo(query, candidate, output, *, n_cpus_prepare):
+        assert n_cpus_prepare == 1
         query_mol = next(m for m in Chem.SDMolSupplier(str(query), removeHs=False) if m)
         mol = next(m for m in Chem.SDMolSupplier(str(candidate), removeHs=False) if m)
         assert query_mol.GetNumAtoms() > query_mol.GetNumHeavyAtoms()
@@ -107,5 +107,5 @@ def test_structure_pipeline_hard_gates(
     assert score.minimized_rmsd == pytest.approx(movement, abs=1e-4)
     assert reason in score.rejection_reason
     assert score.minimized_mol is not None
-    assert busters_run.call_count == (0 if movement > 1.0 else 1)
+    assert busters_run.call_count == 1
     assert not any(scratch.iterdir())

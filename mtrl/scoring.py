@@ -200,7 +200,12 @@ class StructureScoringPipeline:
                 _write_mol(reference_sdf, self.roshambo_reference, "reference")
                 _write_mol(candidate_sdf, candidate, name)
                 with _quiet_tools(not self.config.verbose_tools):
-                    roshambo.run(reference_sdf, candidate_sdf, aligned_sdf)
+                    roshambo.run(
+                        reference_sdf,
+                        candidate_sdf,
+                        aligned_sdf,
+                        n_cpus_prepare=1,
+                    )
                 combo = extract_tanimoto_combination(aligned_sdf)
                 if combo is None:
                     return StructureScore(rejection_reason="Roshambo2 score is missing")
@@ -222,18 +227,6 @@ class StructureScoringPipeline:
                         rejection_reason="GNINA CNNaffinity is missing",
                         minimized_mol=Chem.Mol(minimized_before_busters),
                     )
-                if rmsd > self.config.max_minimized_rmsd:
-                    return StructureScore(
-                        cnn_affinity=float(affinity),
-                        roshambo_tanimoto_combo=combo,
-                        minimized_rmsd=rmsd,
-                        rejection_reason=(
-                            f"minimization RMSD={rmsd:.3f} A > "
-                            f"{self.config.max_minimized_rmsd:.3f} A"
-                        ),
-                        minimized_mol=Chem.Mol(minimized_before_busters),
-                    )
-
                 with _quiet_tools(not self.config.verbose_tools):
                     busters.run(self.config.receptor_pdb, minimized_sdf)
                 gnina_scores = extract_scores(minimized_sdf)

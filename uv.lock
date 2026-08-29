@@ -764,7 +764,7 @@ wheels = [
 [[package]]
 name = "lad"
 version = "0.1.0"
-source = { git = "https://github.com/OrogenTX/lad.git?rev=2334b9e4c198ba0da67f9b39ec162f2a3f47b034#2334b9e4c198ba0da67f9b39ec162f2a3f47b034" }
+source = { git = "https://github.com/OrogenTX/lad.git?rev=e15343efcdddf9a9b7fb3e025cf30ea3df1a7a23#e15343efcdddf9a9b7fb3e025cf30ea3df1a7a23" }
 dependencies = [
     { name = "biopython", marker = "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
     { name = "cupy-cuda12x", marker = "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
@@ -1126,7 +1126,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "amsr", git = "https://github.com/hstern2/amsr?rev=d77d805ef4995689d80581288a49937fbe5f6307" },
-    { name = "lad", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", git = "https://github.com/OrogenTX/lad.git?rev=2334b9e4c198ba0da67f9b39ec162f2a3f47b034" },
+    { name = "lad", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", git = "https://github.com/OrogenTX/lad.git?rev=e15343efcdddf9a9b7fb3e025cf30ea3df1a7a23" },
     { name = "matplotlib", specifier = ">=3.8" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4" },

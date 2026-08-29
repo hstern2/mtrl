@@ -452,13 +452,17 @@ class DockingObjectives(Objectives):
             "accepted": len(accepted),
             "accepted_percent": 100.0 * len(accepted) / max(1, len(score_records)),
             "cumulative_accepted": prior_accepted + len(accepted),
+            "decode_failed": reasons.count("AMSR decode failed"),
+            "disconnected_failed": reasons.count("molecule is disconnected"),
             "lilly_failed": sum(reason.startswith("Lilly Medchem Rules") for reason in reasons),
-            "rmsd_failed": sum(reason.startswith("minimization RMSD=") for reason in reasons),
+            "conformer_failed": reasons.count("AMSR conformer construction failed"),
             "posebusters_failed": reasons.count("PoseBusters failed"),
-            "other_failed": sum(
+            "scoring_failed": sum(
                 not (
-                    reason.startswith("Lilly Medchem Rules")
-                    or reason.startswith("minimization RMSD=")
+                    reason == "AMSR decode failed"
+                    or reason == "molecule is disconnected"
+                    or reason.startswith("Lilly Medchem Rules")
+                    or reason == "AMSR conformer construction failed"
                     or reason == "PoseBusters failed"
                 )
                 for reason in reasons

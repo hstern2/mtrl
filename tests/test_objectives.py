@@ -1,3 +1,4 @@
+import csv
 import json
 from pathlib import Path
 
@@ -228,6 +229,16 @@ def test_score_audit_records_accepted_scores_and_rejections(tmp_path) -> None:
     assert records[0]["minimized_rmsd"] == pytest.approx(0.25)
     assert records[1]["accepted"] is False
     assert records[1]["rejection_reason"] == "AMSR decode failed"
+    with (tmp_path / "progress.csv").open(newline="") as source:
+        progress = next(csv.DictReader(source))
+    assert progress["generated"] == "2"
+    assert progress["accepted"] == "1"
+    assert progress["decode_failed"] == "1"
+    assert progress["disconnected_failed"] == "0"
+    assert progress["lilly_failed"] == "0"
+    assert progress["conformer_failed"] == "0"
+    assert progress["posebusters_failed"] == "0"
+    assert progress["scoring_failed"] == "0"
 
 
 def test_generation_and_overall_sdfs_contain_complete_pareto_fronts(tmp_path) -> None:

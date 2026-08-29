@@ -42,12 +42,12 @@ def test_rl_help_explains_training_and_output_options() -> None:
     result = CliRunner().invoke(app, ["rl", "-h"])
 
     assert result.exit_code == 0
+    assert "max-minimized-rmsd" not in result.stdout
     help_text = _normalized(result.stdout)
     for explanation in (
         "initial policy",
         "GNINA's minimization box",
         "Worker processes used concurrently",
-        "not realigned",
         "total generated molecules",
         "Peak AdamW learning rate",
         "short RL runs",

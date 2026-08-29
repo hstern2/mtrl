@@ -14,7 +14,6 @@ class ScoringConfig:
     receptor_pdb: Path
     reference_sdf: Path
     output_dir: Path
-    max_minimized_rmsd: float = 1.0
     lilly_medchem_rules: bool = False
     lilly_rules_executable: str = "Lilly_Medchem_Rules.rb"
     verbose_tools: bool = False
@@ -25,8 +24,6 @@ class ScoringConfig:
             raise ValueError(f"receptor PDB does not exist: {self.receptor_pdb}")
         if not self.reference_sdf.is_file():
             raise ValueError(f"reference SDF does not exist: {self.reference_sdf}")
-        if self.max_minimized_rmsd <= 0:
-            raise ValueError("max_minimized_rmsd must be > 0")
         if self.evaluation_workers <= 0:
             raise ValueError("evaluation_workers must be > 0")
 

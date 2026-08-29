@@ -33,9 +33,9 @@ For each generated AMSR string, `mtrl`:
    Rules with `-relaxed`;
 3. constructs the AMSR 3D conformer and aligns it to a reference ligand with
    Roshambo2;
-4. minimizes the aligned pose with GNINA and rejects poses whose
-   symmetry-corrected heavy-atom movement exceeds 1.0 A by default;
-5. runs receptor-aware PoseBusters on the remaining poses.
+4. minimizes the aligned pose with GNINA and records how far minimization moves
+   it, without using that movement as a rejection gate;
+5. runs receptor-aware PoseBusters on the minimized pose.
 
 Accepted molecules maximize GNINA `CNNaffinity` and Roshambo2
 `tanimoto_combination`. Their base reward is fixed between generations:
@@ -62,7 +62,6 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
   --receptor-pdb receptor.pdb \
   --reference-sdf reference_ligand.sdf \
   --lilly-medchem-rules \
-  --max-minimized-rmsd 1.0 \
   --output-dir run_rl
 ```
 

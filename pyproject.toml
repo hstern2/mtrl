@@ -15,7 +15,7 @@ dependencies = [
     "torch>=2.4,<3",
     "trl>=0.1.0",
     "amsr>=0.1.0",
-    "lad @ git+https://github.com/OrogenTX/lad.git@2334b9e4c198ba0da67f9b39ec162f2a3f47b034 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "lad @ git+https://github.com/OrogenTX/lad.git@e15343efcdddf9a9b7fb3e025cf30ea3df1a7a23 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "rdkit",
     "matplotlib>=3.8",
     "typer>=0.9",

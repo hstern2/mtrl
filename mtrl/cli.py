@@ -169,15 +169,6 @@ def rl(
         ),
         rich_help_panel="Parallel evaluation",
     ),
-    max_minimized_rmsd: float = typer.Option(
-        1.0,
-        "--max-minimized-rmsd",
-        help=(
-            "Reject if GNINA moves the Roshambo2-aligned pose by more than this "
-            "symmetry-corrected heavy-atom RMSD, in Angstrom; poses are not realigned"
-        ),
-        rich_help_panel="Molecule gates",
-    ),
     lilly_medchem_rules: bool = typer.Option(
         False,
         "--lilly-medchem-rules/--no-lilly-medchem-rules",
@@ -324,7 +315,6 @@ def rl(
     from mtrl.config import ScoringConfig
 
     for name, value in (
-        ("--max-minimized-rmsd", max_minimized_rmsd),
         ("--iterations", iterations),
         ("--batch-size", batch_size),
         ("--lr", lr),
@@ -364,7 +354,6 @@ def rl(
         receptor_pdb=receptor_pdb.resolve(),
         reference_sdf=reference_sdf.resolve(),
         output_dir=output_dir,
-        max_minimized_rmsd=max_minimized_rmsd,
         lilly_medchem_rules=lilly_medchem_rules,
         lilly_rules_executable=lilly_rules_executable,
         verbose_tools=verbose_tools,
