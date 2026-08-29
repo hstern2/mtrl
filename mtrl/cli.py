@@ -6,10 +6,15 @@ from pathlib import Path
 
 import typer
 
-from mtrl.hardware import default_conformer_workers, fast_cli_sampling_batch_size
+from mtrl.hardware import (
+    default_conformer_workers,
+    default_evaluation_workers,
+    fast_cli_sampling_batch_size,
+)
 
 _CLI_BATCH_SIZE = fast_cli_sampling_batch_size()
 _CLI_CONFORMER_WORKERS = default_conformer_workers(100)
+_CLI_EVALUATION_WORKERS = default_evaluation_workers()
 
 app = typer.Typer(
     help="mtrl: molecular generation with AMSR + trl",
@@ -155,6 +160,15 @@ def rl(
         help=("3D reference ligand used for Roshambo2 alignment and as GNINA's minimization box"),
         rich_help_panel="Scoring inputs",
     ),
+    evaluation_workers: int = typer.Option(
+        _CLI_EVALUATION_WORKERS,
+        "--evaluation-workers",
+        help=(
+            "Worker processes used concurrently for AMSR conformer construction, "
+            "Roshambo2 alignment, GNINA minimization, and PoseBusters"
+        ),
+        rich_help_panel="Parallel evaluation",
+    ),
     max_minimized_rmsd: float = typer.Option(
         1.0,
         "--max-minimized-rmsd",
@@ -222,8 +236,9 @@ def rl(
     pareto_lambda: float = typer.Option(
         0.1,
         help=(
-            "Diversity bonus within each affinity/shape Pareto front; 0 uses Pareto "
-            "rank alone, while larger values favor a wider tradeoff spread"
+            "Bonus for a molecule that adds a new point to the cumulative "
+            "affinity/similarity Pareto front; absolute joint quality supplies the "
+            "base reward"
         ),
         rich_help_panel="RL training",
     ),
@@ -284,8 +299,8 @@ def rl(
         Path("mtrl_output/"),
         "--output-dir",
         help=(
-            "Empty directory for best/ Pareto SDFs, scores.jsonl, the run config, "
-            "and RL checkpoints"
+            "Empty directory for generation SDFs, Pareto SDFs, progress reports, "
+            "scores.jsonl, configuration, and RL checkpoints"
         ),
         rich_help_panel="Output and logging",
     ),
@@ -316,6 +331,7 @@ def rl(
         ("--temperature", temperature),
         ("--temperature-final", temperature_final),
         ("--log-every", log_every),
+        ("--evaluation-workers", evaluation_workers),
     ):
         if value <= 0:
             raise typer.BadParameter(f"{name} must be > 0")
@@ -352,6 +368,7 @@ def rl(
         lilly_medchem_rules=lilly_medchem_rules,
         lilly_rules_executable=lilly_rules_executable,
         verbose_tools=verbose_tools,
+        evaluation_workers=evaluation_workers,
     )
     config.install()
 
@@ -366,10 +383,15 @@ def rl(
                     "batch_size": batch_size,
                     "checkpoint": str(checkpoint.resolve()),
                     "checkpoint_every": checkpoint_every,
+                    "evaluation_workers": evaluation_workers,
                     "iterations": iterations,
                     "kl_beta": kl_beta,
                     "lr": lr,
                     "pareto_lambda": pareto_lambda,
+                    "reward": (
+                        "reference-normalized CNNaffinity * Tanimoto similarity, "
+                        "plus cumulative-Pareto-front bonus"
+                    ),
                     "precision": precision,
                     "save_final_checkpoint": save_final_checkpoint,
                     "seed": seed,

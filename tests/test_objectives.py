@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from rdkit import Chem
+from trl.objectives.base import ScoredItem
 
 from mtrl import DecodedAMSR
 from mtrl.config import ScoringConfig
@@ -83,6 +84,61 @@ def test_only_accepted_structures_receive_the_two_pareto_scores(tmp_path) -> Non
     rewards = suite.get_rewards(scored)
     assert rewards[0] > 0
     assert np.array_equal(rewards[1:], np.zeros(2))
+
+
+def test_rewards_are_absolute_across_batches_and_increase_with_both_objectives(
+    tmp_path,
+) -> None:
+    suite = DockingObjectives(
+        _config(tmp_path),
+        pipeline=FakePipeline([]),
+    )
+    suite.reference_score = StructureScore(cnn_affinity=8.0)
+    weak = ScoredItem(
+        token_ids=[],
+        scores={"gnina_cnn_affinity": 4.0, "roshambo_tanimoto_combo": 0.25},
+    )
+    strong = ScoredItem(
+        token_ids=[],
+        scores={"gnina_cnn_affinity": 8.0, "roshambo_tanimoto_combo": 0.50},
+    )
+    invalid = ScoredItem(token_ids=[], valid=False)
+
+    # A one-item weak batch must not receive the same reward as a one-item strong
+    # batch. That was the failure mode of per-batch Pareto ranking.
+    assert suite.get_rewards([weak])[0] == pytest.approx(0.125)
+    assert suite.get_rewards([strong])[0] == pytest.approx(0.50)
+    assert suite.get_rewards([strong, weak, invalid]).tolist() == pytest.approx(
+        [0.50, 0.125, 0.0]
+    )
+
+
+def test_only_new_cumulative_pareto_points_receive_the_bonus(tmp_path) -> None:
+    suite = DockingObjectives(
+        _config(tmp_path),
+        pipeline=FakePipeline([]),
+    )
+    suite.reference_score = StructureScore(cnn_affinity=8.0)
+    suite.pareto_lambda = 0.1
+    suite._previous_front = [
+        {"cnn_affinity": 6.0, "tanimoto_combo": 0.4},
+    ]
+    suite._overall_front = [
+        {"cnn_affinity": 6.0, "tanimoto_combo": 0.4},
+        {"cnn_affinity": 5.0, "tanimoto_combo": 0.6},
+    ]
+    old_front = ScoredItem(
+        token_ids=[],
+        scores={"gnina_cnn_affinity": 6.0, "roshambo_tanimoto_combo": 0.4},
+    )
+    new_front = ScoredItem(
+        token_ids=[],
+        scores={"gnina_cnn_affinity": 5.0, "roshambo_tanimoto_combo": 0.6},
+    )
+
+    rewards = suite.get_rewards([old_front, new_front])
+    assert rewards[0] == pytest.approx(0.30)
+    assert rewards[1] == pytest.approx(0.475)
 
 
 def test_lilly_runs_before_conformer_construction_and_structure_scoring(tmp_path) -> None:
@@ -245,7 +301,15 @@ def test_generation_and_overall_sdfs_contain_complete_pareto_fronts(tmp_path) ->
         for mol in Chem.SDMolSupplier(str(tmp_path / "best" / "overall.sdf"), removeHs=False)
         if mol is not None
     ]
+    all_generation_one = [
+        mol
+        for mol in Chem.SDMolSupplier(
+            str(tmp_path / "generations" / "generation_000001.sdf"), removeHs=False
+        )
+        if mol is not None
+    ]
     assert len(generation_two) == 2
+    assert len(all_generation_one) == 3
     assert {mol.GetProp("AMSR") for mol in overall} == {"1", "3", "4"}
     for mol in overall:
         assert mol.HasProp("CNNaffinity")
@@ -258,8 +322,17 @@ def test_generation_and_overall_sdfs_contain_complete_pareto_fronts(tmp_path) ->
         "best/generation_000001.sdf",
         "best/generation_000002.sdf",
         "best/overall.sdf",
+        "generations/generation_000001.sdf",
+        "generations/generation_000002.sdf",
+        "progress.csv",
+        "pareto_progress.png",
+        "progress.png",
         "scores.jsonl",
     }
+    progress = (tmp_path / "progress.csv").read_text().splitlines()
+    assert len(progress) == 3
+    assert "generated" in progress[0]
+    assert ",3,3," in progress[1]
 
 
 def test_multi_gpu_output_is_gathered_before_writing(monkeypatch) -> None:

@@ -2,7 +2,12 @@ import json
 
 from typer.testing import CliRunner
 
-from mtrl.cli import _CLI_BATCH_SIZE, _CLI_CONFORMER_WORKERS, app
+from mtrl.cli import (
+    _CLI_BATCH_SIZE,
+    _CLI_CONFORMER_WORKERS,
+    _CLI_EVALUATION_WORKERS,
+    app,
+)
 
 
 def _normalized(text: str) -> str:
@@ -41,12 +46,13 @@ def test_rl_help_explains_training_and_output_options() -> None:
     for explanation in (
         "initial policy",
         "GNINA's minimization box",
+        "Worker processes used concurrently",
         "not realigned",
         "total generated molecules",
         "Peak AdamW learning rate",
         "short RL runs",
         "starting checkpoint",
-        "Pareto rank alone",
+        "absolute joint quality",
         "temperature changes linearly",
         "new seed each run",
         "V100-era CUDA GPUs",
@@ -165,3 +171,4 @@ def test_rl_chooses_and_records_random_seed(tmp_path, monkeypatch) -> None:
     assert run_config["seed"] == 8675309
     assert run_config["warmup_steps"] == 100
     assert run_config["save_final_checkpoint"] is False
+    assert run_config["evaluation_workers"] == _CLI_EVALUATION_WORKERS

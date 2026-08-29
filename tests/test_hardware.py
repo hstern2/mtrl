@@ -1,6 +1,6 @@
 import subprocess
 
-from mtrl.hardware import fast_cli_sampling_batch_size
+from mtrl.hardware import default_evaluation_workers, fast_cli_sampling_batch_size
 
 
 def test_fast_gpu_query_respects_visible_device(monkeypatch) -> None:
@@ -33,3 +33,11 @@ def test_fast_gpu_query_has_cpu_fallback(monkeypatch) -> None:
     monkeypatch.setattr("mtrl.hardware.platform.system", lambda: "Linux")
 
     assert fast_cli_sampling_batch_size() == 32
+
+
+def test_evaluation_workers_are_bounded(monkeypatch) -> None:
+    monkeypatch.setattr("mtrl.hardware.available_cpu_count", lambda: 30)
+    assert default_evaluation_workers() == 8
+
+    monkeypatch.setattr("mtrl.hardware.available_cpu_count", lambda: 2)
+    assert default_evaluation_workers() == 1

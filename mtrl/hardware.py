@@ -29,6 +29,11 @@ def default_conformer_workers(task_count: int) -> int:
     return min(hardware_limit, workload_limit)
 
 
+def default_evaluation_workers() -> int:
+    """Choose a conservative process count for mixed CPU/GPU structure scoring."""
+    return min(8, max(1, available_cpu_count() // 2))
+
+
 def _first_visible_gpu() -> str | None:
     visible = os.environ.get("CUDA_VISIBLE_DEVICES")
     if visible is None:

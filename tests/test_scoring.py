@@ -72,7 +72,10 @@ def test_structure_pipeline_hard_gates(
     )
 
     def fake_roshambo(query, candidate, output):
+        query_mol = next(m for m in Chem.SDMolSupplier(str(query), removeHs=False) if m)
         mol = next(m for m in Chem.SDMolSupplier(str(candidate), removeHs=False) if m)
+        assert query_mol.GetNumAtoms() > query_mol.GetNumHeavyAtoms()
+        assert mol.GetNumAtoms() > mol.GetNumHeavyAtoms()
         mol.SetProp("tanimoto_combination", "0.77")
         _write(output, mol)
 
@@ -92,7 +95,7 @@ def test_structure_pipeline_hard_gates(
         patch("mtrl.scoring.gnina.require"),
         patch("mtrl.scoring.busters.require"),
         patch("mtrl.scoring.roshambo.run", side_effect=fake_roshambo),
-        patch("mtrl.scoring.busters.run", side_effect=fake_busters),
+        patch("mtrl.scoring.busters.run", side_effect=fake_busters) as busters_run,
     ):
         pipeline = StructureScoringPipeline(config)
         with patch.object(pipeline, "_run_gnina", side_effect=fake_gnina):
@@ -103,5 +106,6 @@ def test_structure_pipeline_hard_gates(
     assert score.roshambo_tanimoto_combo == pytest.approx(0.77)
     assert score.minimized_rmsd == pytest.approx(movement, abs=1e-4)
     assert reason in score.rejection_reason
-    assert (score.minimized_mol is not None) is accepted
+    assert score.minimized_mol is not None
+    assert busters_run.call_count == (0 if movement > 1.0 else 1)
     assert not any(scratch.iterdir())

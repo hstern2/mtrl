@@ -33,14 +33,16 @@ For each generated AMSR string, `mtrl`:
    Rules with `-relaxed`;
 3. constructs the AMSR 3D conformer and aligns it to a reference ligand with
    Roshambo2;
-4. minimizes the aligned pose with GNINA, then runs receptor-aware PoseBusters;
-5. rejects PoseBusters failures and poses whose symmetry-corrected heavy-atom
-   movement during minimization exceeds 1.0 A by default.
+4. minimizes the aligned pose with GNINA and rejects poses whose
+   symmetry-corrected heavy-atom movement exceeds 1.0 A by default;
+5. runs receptor-aware PoseBusters on the remaining poses.
 
-Accepted molecules have two separately maximized Pareto objectives:
-`CNNaffinity` and Roshambo2 `tanimoto_combination`. QED and the former generic
-drug-likeness filter are not used. The model-emitted conformer is scored; mtrl
-does not generate replacement conformers.
+Accepted molecules maximize GNINA `CNNaffinity` and Roshambo2
+`tanimoto_combination`. Their base reward is fixed between generations:
+reference-normalized affinity multiplied by Tanimoto similarity. A molecule
+that extends the cumulative Pareto front receives a small bonus. QED and the
+former generic drug-likeness filter are not used. The model-emitted conformer
+is scored; mtrl does not generate replacement conformers.
 
 ### Install
 
@@ -65,11 +67,14 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
 ```
 
 The default batch is 16 molecules and the default run is 1,000 iterations.
-`run_rl/best/generation_NNNNNN.sdf` contains a generation's accepted Pareto
-front; generations with no accepted molecules have no SDF. `run_rl/best/overall.sdf`
-is the front across the whole run. Every generated string, score, RMSD, and
-rejection reason is in `run_rl/scores.jsonl`.
-`scoring_config.json` and the RL checkpoints are also written directly under
-`run_rl/`. Temporary scoring files use the system temporary directory and are
-removed after each molecule. External-tool chatter is hidden unless
+Conformer construction and structure evaluation use a hardware-based worker
+default, configurable with `--evaluation-workers`.
+`run_rl/generations/generation_NNNNNN.sdf` contains every accepted molecule in
+that generation; generations with no accepted molecules have no SDF.
+`run_rl/best/overall.sdf` is the Pareto front across the whole run. The original
+reference ligand is minimized and scored once in `reference_minimized.sdf` and
+`reference.json`. `progress.csv` and `pareto_progress.png` summarize improvement
+by generation. Every generated string, score, RMSD, and rejection reason is in
+`scores.jsonl`. Temporary scoring files use the system temporary directory and
+are removed after each molecule. External-tool chatter is hidden unless
 `--verbose-tools` is set.

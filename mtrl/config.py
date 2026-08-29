@@ -18,6 +18,7 @@ class ScoringConfig:
     lilly_medchem_rules: bool = False
     lilly_rules_executable: str = "Lilly_Medchem_Rules.rb"
     verbose_tools: bool = False
+    evaluation_workers: int = 1
 
     def validate(self) -> None:
         if not self.receptor_pdb.is_file():
@@ -26,6 +27,8 @@ class ScoringConfig:
             raise ValueError(f"reference SDF does not exist: {self.reference_sdf}")
         if self.max_minimized_rmsd <= 0:
             raise ValueError("max_minimized_rmsd must be > 0")
+        if self.evaluation_workers <= 0:
+            raise ValueError("evaluation_workers must be > 0")
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
