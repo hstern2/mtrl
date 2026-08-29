@@ -72,6 +72,13 @@ def _write_mol(path: Path, mol: Mol, name: str) -> None:
         writer.close()
 
 
+def _read_mol(path: Path, *, quiet: bool) -> Mol:
+    if not quiet:
+        return read_mol(path)
+    with rdBase.BlockLogs():
+        return read_mol(path)
+
+
 @contextmanager
 def _quiet_tools(quiet: bool) -> Iterator[None]:
     if not quiet:
@@ -198,10 +205,13 @@ class StructureScoringPipeline:
                 if combo is None:
                     return StructureScore(rejection_reason="Roshambo2 score is missing")
 
-                aligned = read_mol(aligned_sdf)
+                aligned = _read_mol(aligned_sdf, quiet=not self.config.verbose_tools)
                 _write_mol(minimized_sdf, aligned, name)
                 self._run_gnina(minimized_sdf)
-                minimized_before_busters = read_mol(minimized_sdf)
+                minimized_before_busters = _read_mol(
+                    minimized_sdf,
+                    quiet=not self.config.verbose_tools,
+                )
                 rmsd = minimized_pose_rmsd(aligned, minimized_before_busters)
                 gnina_scores = extract_scores(minimized_sdf)
                 affinity = gnina_scores.get("CNNaffinity")
