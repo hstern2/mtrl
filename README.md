@@ -76,7 +76,8 @@ default, configurable with `--evaluation-workers`.
 that generation; generations with no accepted molecules have no SDF.
 `run_rl/best/overall.sdf` is the Pareto front across the whole run. The original
 reference ligand is minimized and scored once in `reference_minimized.sdf` and
-`reference.json`. `progress.csv` and `pareto_progress.png` summarize improvement
+`reference.json`. `summary.txt` gives concise cumulative acceptance, gate-failure,
+and score statistics. `progress.csv` and `pareto_progress.png` show improvement
 by generation. Every generated string, score, RMSD, and rejection reason is in
 `scores.jsonl`. Temporary scoring files use the system temporary directory and
 are removed after each molecule. External-tool chatter is hidden unless

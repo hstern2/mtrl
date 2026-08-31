@@ -14,6 +14,111 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
 
+def _progress_rows(progress_path: Path) -> list[dict[str, str]]:
+    with progress_path.open(newline="") as source:
+        return list(csv.DictReader(source))
+
+
+def _weighted_mean(rows: list[dict[str, str]], field: str) -> float | None:
+    weighted_sum = 0.0
+    count = 0
+    for row in rows:
+        value = row.get(field)
+        accepted = int(row.get("accepted") or 0)
+        if value and accepted:
+            weighted_sum += float(value) * accepted
+            count += accepted
+    return weighted_sum / count if count else None
+
+
+def write_run_summary(output_dir: Path, destination: Path | None = None) -> Path | None:
+    """Write a compact cumulative, human-readable RL status report."""
+    progress_path = output_dir / "progress.csv"
+    if not progress_path.is_file():
+        return None
+    rows = _progress_rows(progress_path)
+    if not rows:
+        return None
+
+    latest = rows[-1]
+    generated = int(latest["cumulative_generated"])
+    accepted = int(latest["cumulative_accepted"])
+    rejected = generated - accepted
+    failures = (
+        ("AMSR decode", "decode_failed"),
+        ("Disconnected molecule", "disconnected_failed"),
+        ("Lilly Medchem Rules (-relaxed)", "lilly_failed"),
+        ("AMSR conformer construction", "conformer_failed"),
+        ("PoseBusters", "posebusters_failed"),
+        ("Alignment/minimization/scoring", "scoring_failed"),
+    )
+
+    def percentage(count: int) -> str:
+        return f"{100.0 * count / max(1, generated):.2f}%"
+
+    lines = [
+        "mtrl RL summary",
+        "",
+        f"Generations completed: {int(latest['generation']):,}",
+        f"Strings generated: {generated:,}",
+        f"Passed all gates: {accepted:,} ({percentage(accepted)})",
+        f"Rejected: {rejected:,} ({percentage(rejected)})",
+        "",
+        "Gate failures (percentage of all generated strings):",
+    ]
+    for label, field in failures:
+        count = sum(int(row.get(field) or 0) for row in rows)
+        lines.append(f"  {label}: {count:,} ({percentage(count)})")
+
+    mean_affinity = _weighted_mean(rows, "mean_cnn_affinity")
+    mean_similarity = _weighted_mean(rows, "mean_tanimoto_combo")
+    best_affinity = max(
+        (float(row["best_cnn_affinity"]) for row in rows if row.get("best_cnn_affinity")),
+        default=None,
+    )
+    best_similarity = max(
+        (float(row["best_tanimoto_combo"]) for row in rows if row.get("best_tanimoto_combo")),
+        default=None,
+    )
+    lines.extend(
+        [
+            "",
+            "Accepted-molecule scores:",
+            f"  Mean gnina CNNaffinity: {mean_affinity:.3f}"
+            if mean_affinity is not None
+            else "  Mean gnina CNNaffinity: n/a",
+            f"  Best gnina CNNaffinity: {best_affinity:.3f}"
+            if best_affinity is not None
+            else "  Best gnina CNNaffinity: n/a",
+            f"  Mean Tanimoto similarity: {mean_similarity:.3f}"
+            if mean_similarity is not None
+            else "  Mean Tanimoto similarity: n/a",
+            f"  Best Tanimoto similarity: {best_similarity:.3f}"
+            if best_similarity is not None
+            else "  Best Tanimoto similarity: n/a",
+        ]
+    )
+    reference_affinity = latest.get("original_t9c_cnn_affinity")
+    if reference_affinity:
+        lines.append(f"  Reference-ligand gnina CNNaffinity: {float(reference_affinity):.3f}")
+    lines.extend(
+        [
+            "",
+            f"Latest generation: {int(latest['accepted']):,}/{int(latest['generated']):,} "
+            f"accepted ({float(latest['accepted_percent']):.2f}%)",
+        ]
+    )
+
+    output_path = destination or output_dir / "summary.txt"
+    temporary = Path(f"{output_path}.tmp.{os.getpid()}")
+    try:
+        temporary.write_text("\n".join(lines) + "\n")
+        os.replace(temporary, output_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return output_path
+
+
 def _accepted_records(scores_path: Path) -> list[dict[str, Any]]:
     records = []
     with scores_path.open() as source:
@@ -123,8 +228,7 @@ def write_pareto_progress(output_dir: Path, destination: Path | None = None) -> 
 
 def write_affinity_progress(output_dir: Path, destination: Path | None = None) -> Path | None:
     progress_path = output_dir / "progress.csv"
-    with progress_path.open(newline="") as source:
-        rows = list(csv.DictReader(source))
+    rows = _progress_rows(progress_path)
     if not rows:
         return None
 
@@ -205,6 +309,7 @@ def main() -> None:
             paths = (
                 write_pareto_progress(args.output_dir),
                 write_affinity_progress(args.output_dir),
+                write_run_summary(args.output_dir),
             )
             for path in paths:
                 if path is not None:

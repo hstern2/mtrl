@@ -338,8 +338,9 @@ def test_generation_and_overall_sdfs_contain_complete_pareto_fronts(tmp_path) ->
         "progress.csv",
         "pareto_progress.png",
         "progress.png",
-        "scores.jsonl",
-    }
+            "scores.jsonl",
+            "summary.txt",
+        }
     progress = (tmp_path / "progress.csv").read_text().splitlines()
     assert len(progress) == 3
     assert "generated" in progress[0]

@@ -221,8 +221,7 @@ class DockingObjectives(Objectives):
     @staticmethod
     def _front_scores(records: list[dict[str, Any]]) -> list[tuple[float, float]]:
         return [
-            (float(record["cnn_affinity"]), float(record["tanimoto_combo"]))
-            for record in records
+            (float(record["cnn_affinity"]), float(record["tanimoto_combo"])) for record in records
         ]
 
     @staticmethod
@@ -489,10 +488,11 @@ class DockingObjectives(Objectives):
         self._plot_progress()
 
     def _plot_progress(self) -> None:
-        from mtrl.report import write_affinity_progress, write_pareto_progress
+        from mtrl.report import write_affinity_progress, write_pareto_progress, write_run_summary
 
         write_pareto_progress(self.config.output_dir)
         write_affinity_progress(self.config.output_dir)
+        write_run_summary(self.config.output_dir)
 
     def close(self) -> None:
         self.pipeline.close()
