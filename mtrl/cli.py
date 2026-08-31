@@ -140,9 +140,21 @@ def rl(
         exists=True,
         dir_okay=False,
         help=(
-            "Pretrained AMSR checkpoint (.pt) used as both the initial policy and "
-            "the frozen KL-reference model"
+            "AMSR checkpoint (.pt) used as the initial policy; also used as the "
+            "KL reference unless --kl-reference-checkpoint is provided"
         ),
+    ),
+    kl_reference_checkpoint: Path | None = typer.Option(
+        None,
+        "--kl-reference-checkpoint",
+        exists=True,
+        dir_okay=False,
+        help=(
+            "Optional frozen checkpoint used only for the KL penalty; use this when "
+            "warm-starting from an RL checkpoint while retaining the original model "
+            "as the regularization anchor"
+        ),
+        rich_help_panel="RL training",
     ),
     receptor_pdb: Path = typer.Option(
         ...,
@@ -375,6 +387,9 @@ def rl(
                     "evaluation_workers": evaluation_workers,
                     "iterations": iterations,
                     "kl_beta": kl_beta,
+                    "kl_reference_checkpoint": str(kl_reference_checkpoint.resolve())
+                    if kl_reference_checkpoint is not None
+                    else str(checkpoint.resolve()),
                     "lr": lr,
                     "pareto_lambda": pareto_lambda,
                     "reward": (
@@ -398,6 +413,11 @@ def rl(
         checkpoint_path=str(checkpoint),
         vocab_path=None,
         objectives_path="mtrl.objectives:build",
+        reference_checkpoint_path=(
+            str(kl_reference_checkpoint.resolve())
+            if kl_reference_checkpoint is not None
+            else None
+        ),
         iterations=iterations,
         batch_size=batch_size,
         lr=lr,

@@ -46,6 +46,7 @@ def test_rl_help_explains_training_and_output_options() -> None:
     help_text = _normalized(result.stdout)
     for explanation in (
         "initial policy",
+        "regularization anchor",
         "GNINA's minimization box",
         "Worker processes used concurrently",
         "total generated molecules",
@@ -165,6 +166,7 @@ def test_rl_chooses_and_records_random_seed(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert received["seed"] == 8675309
+    assert received["reference_checkpoint_path"] is None
     assert received["warmup_steps"] == 100
     assert received["save_final_checkpoint"] is False
     run_config = json.loads((output / "run_config.json").read_text())
@@ -172,3 +174,42 @@ def test_rl_chooses_and_records_random_seed(tmp_path, monkeypatch) -> None:
     assert run_config["warmup_steps"] == 100
     assert run_config["save_final_checkpoint"] is False
     assert run_config["evaluation_workers"] == _CLI_EVALUATION_WORKERS
+    assert run_config["kl_reference_checkpoint"] == str(checkpoint.resolve())
+
+
+def test_rl_records_a_separate_kl_reference_checkpoint(tmp_path, monkeypatch) -> None:
+    checkpoint = tmp_path / "policy.pt"
+    kl_reference = tmp_path / "reference.pt"
+    receptor = tmp_path / "receptor.pdb"
+    reference_sdf = tmp_path / "reference.sdf"
+    output = tmp_path / "output"
+    for path in (checkpoint, kl_reference, receptor, reference_sdf):
+        path.touch()
+    received = {}
+
+    monkeypatch.setattr("trl.training.rl_train.rl_train", lambda **kwargs: received.update(kwargs))
+    result = CliRunner().invoke(
+        app,
+        [
+            "rl",
+            str(checkpoint),
+            "--kl-reference-checkpoint",
+            str(kl_reference),
+            "--receptor-pdb",
+            str(receptor),
+            "--reference-sdf",
+            str(reference_sdf),
+            "--output-dir",
+            str(output),
+            "--iterations",
+            "1",
+            "--checkpoint-every",
+            "0",
+            "--no-save-final-checkpoint",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert received["reference_checkpoint_path"] == str(kl_reference.resolve())
+    run_config = json.loads((output / "run_config.json").read_text())
+    assert run_config["kl_reference_checkpoint"] == str(kl_reference.resolve())

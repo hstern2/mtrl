@@ -111,10 +111,13 @@ def write_pareto_progress(output_dir: Path, destination: Path | None = None) -> 
     figure.tight_layout()
 
     output_path = destination or output_dir / "pareto_progress.png"
-    temporary = Path(f"{output_path}.tmp")
-    figure.savefig(temporary, format="png", dpi=160)
-    plt.close(figure)
-    os.replace(temporary, output_path)
+    temporary = Path(f"{output_path}.tmp.{os.getpid()}")
+    try:
+        figure.savefig(temporary, format="png", dpi=160)
+        os.replace(temporary, output_path)
+    finally:
+        plt.close(figure)
+        temporary.unlink(missing_ok=True)
     return output_path
 
 
@@ -161,10 +164,13 @@ def write_affinity_progress(output_dir: Path, destination: Path | None = None) -
     figure.tight_layout()
 
     output_path = destination or output_dir / "progress.png"
-    temporary = Path(f"{output_path}.tmp")
-    figure.savefig(temporary, format="png", dpi=150)
-    plt.close(figure)
-    os.replace(temporary, output_path)
+    temporary = Path(f"{output_path}.tmp.{os.getpid()}")
+    try:
+        figure.savefig(temporary, format="png", dpi=150)
+        os.replace(temporary, output_path)
+    finally:
+        plt.close(figure)
+        temporary.unlink(missing_ok=True)
     return output_path
 
 

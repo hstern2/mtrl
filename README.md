@@ -65,6 +65,10 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
   --output-dir run_rl
 ```
 
+For a warm start from an RL checkpoint, add
+`--kl-reference-checkpoint /path/to/original.pt` to keep the original model as
+the fixed KL anchor.
+
 The default batch is 16 molecules and the default run is 1,000 iterations.
 Conformer construction and structure evaluation use a hardware-based worker
 default, configurable with `--evaluation-workers`.
