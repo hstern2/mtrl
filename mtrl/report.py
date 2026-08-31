@@ -209,7 +209,7 @@ def write_pareto_progress(output_dir: Path, destination: Path | None = None) -> 
 
     axis.set(
         xlabel="gnina CNNaffinity",
-        ylabel="Tanimoto similarity",
+        ylabel="3D Tanimoto similarity",
     )
     axis.grid(alpha=0.18)
     axis.legend(loc="best", fontsize=8)
