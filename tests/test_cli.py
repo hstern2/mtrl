@@ -39,22 +39,23 @@ def test_short_help_option() -> None:
 
 
 def test_rl_help_explains_training_and_output_options() -> None:
-    result = CliRunner().invoke(app, ["rl", "-h"])
+    result = CliRunner().invoke(app, ["rl", "-h"], terminal_width=120)
 
     assert result.exit_code == 0
     assert "max-minimized-rmsd" not in result.stdout
     help_text = _normalized(result.stdout)
     for explanation in (
         "initial policy",
-        "regularization anchor",
+        "regularization",
         "GNINA's minimization box",
         "Worker processes used concurrently",
-        "total generated molecules",
-        "Peak AdamW learning rate",
+        "Final RL iteration",
+        "Restore optimizer",
+        "Peak AdamW",
         "short RL runs",
         "starting checkpoint",
-        "absolute joint quality",
-        "temperature changes linearly",
+        "absolute joint",
+        "temperature changes",
         "new seed each run",
         "V100-era CUDA GPUs",
         "rl_final.pt",
@@ -169,12 +170,15 @@ def test_rl_chooses_and_records_random_seed(tmp_path, monkeypatch) -> None:
     assert received["reference_checkpoint_path"] is None
     assert received["warmup_steps"] == 100
     assert received["save_final_checkpoint"] is False
+    assert received["resume_training_state"] is False
     run_config = json.loads((output / "run_config.json").read_text())
     assert run_config["seed"] == 8675309
     assert run_config["warmup_steps"] == 100
     assert run_config["save_final_checkpoint"] is False
     assert run_config["evaluation_workers"] == _CLI_EVALUATION_WORKERS
     assert run_config["kl_reference_checkpoint"] == str(checkpoint.resolve())
+    assert run_config["resume_training_state"] is False
+    assert run_config["resumed_from_step"] == 0
 
 
 def test_rl_records_a_separate_kl_reference_checkpoint(tmp_path, monkeypatch) -> None:
@@ -213,3 +217,53 @@ def test_rl_records_a_separate_kl_reference_checkpoint(tmp_path, monkeypatch) ->
     assert received["reference_checkpoint_path"] == str(kl_reference.resolve())
     run_config = json.loads((output / "run_config.json").read_text())
     assert run_config["kl_reference_checkpoint"] == str(kl_reference.resolve())
+
+
+def test_rl_resumes_available_training_state_and_generation_number(tmp_path, monkeypatch) -> None:
+    import torch
+
+    checkpoint = tmp_path / "policy.pt"
+    receptor = tmp_path / "receptor.pdb"
+    reference_sdf = tmp_path / "reference.sdf"
+    output = tmp_path / "output"
+    torch.save(
+        {
+            "step": 375,
+            "optimizer": {},
+            "scheduler": {},
+            "rng_states": [{}],
+        },
+        checkpoint,
+    )
+    receptor.touch()
+    reference_sdf.touch()
+    received = {}
+
+    monkeypatch.setattr("trl.training.rl_train.rl_train", lambda **kwargs: received.update(kwargs))
+    result = CliRunner().invoke(
+        app,
+        [
+            "rl",
+            str(checkpoint),
+            "--resume-training-state",
+            "--receptor-pdb",
+            str(receptor),
+            "--reference-sdf",
+            str(reference_sdf),
+            "--output-dir",
+            str(output),
+            "--iterations",
+            "1000",
+            "--checkpoint-every",
+            "0",
+            "--no-save-final-checkpoint",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert received["resume_training_state"] is True
+    scoring_config = json.loads((output / "scoring_config.json").read_text())
+    assert scoring_config["initial_generation"] == 376
+    run_config = json.loads((output / "run_config.json").read_text())
+    assert run_config["resumed_from_step"] == 375
+    assert run_config["value_head_resume"] == "initialized fresh (legacy checkpoint)"

@@ -62,7 +62,8 @@ def test_run_summary_reports_cumulative_filters_and_scores(tmp_path) -> None:
 
     assert output == tmp_path / "summary.txt"
     summary = output.read_text()
-    assert "Generations completed: 2" in summary
+    assert "Generations in this run: 2" in summary
+    assert "Latest generation number: 2" in summary
     assert "Strings generated: 20" in summary
     assert "Passed all gates: 13 (65.00%)" in summary
     assert "Lilly Medchem Rules (-relaxed): 2 (10.00%)" in summary

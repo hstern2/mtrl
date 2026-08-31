@@ -59,7 +59,8 @@ def write_run_summary(output_dir: Path, destination: Path | None = None) -> Path
     lines = [
         "mtrl RL summary",
         "",
-        f"Generations completed: {int(latest['generation']):,}",
+        f"Generations in this run: {len(rows):,}",
+        f"Latest generation number: {int(latest['generation']):,}",
         f"Strings generated: {generated:,}",
         f"Passed all gates: {accepted:,} ({percentage(accepted)})",
         f"Rejected: {rejected:,} ({percentage(rejected)})",

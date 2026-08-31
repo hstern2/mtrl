@@ -109,9 +109,7 @@ def test_rewards_are_absolute_across_batches_and_increase_with_both_objectives(
     # batch. That was the failure mode of per-batch Pareto ranking.
     assert suite.get_rewards([weak])[0] == pytest.approx(0.125)
     assert suite.get_rewards([strong])[0] == pytest.approx(0.50)
-    assert suite.get_rewards([strong, weak, invalid]).tolist() == pytest.approx(
-        [0.50, 0.125, 0.0]
-    )
+    assert suite.get_rewards([strong, weak, invalid]).tolist() == pytest.approx([0.50, 0.125, 0.0])
 
 
 def test_only_new_cumulative_pareto_points_receive_the_bonus(tmp_path) -> None:
@@ -338,9 +336,9 @@ def test_generation_and_overall_sdfs_contain_complete_pareto_fronts(tmp_path) ->
         "progress.csv",
         "pareto_progress.png",
         "progress.png",
-            "scores.jsonl",
-            "summary.txt",
-        }
+        "scores.jsonl",
+        "summary.txt",
+    }
     progress = (tmp_path / "progress.csv").read_text().splitlines()
     assert len(progress) == 3
     assert "generated" in progress[0]

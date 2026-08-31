@@ -202,8 +202,18 @@ def rl(
     iterations: int = typer.Option(
         1000,
         help=(
-            "Number of sample-score-update cycles; total generated molecules are "
-            "iterations multiplied by batch size"
+            "Final RL iteration number; for a fresh run this is the number of "
+            "sample-score-update cycles, while a resumed run continues up to this step"
+        ),
+        rich_help_panel="RL training",
+    ),
+    resume_training_state: bool = typer.Option(
+        False,
+        "--resume-training-state/--fresh-training-state",
+        help=(
+            "Restore optimizer, learning-rate schedule, scaler, RNG, and saved value "
+            "head from the policy checkpoint; legacy checkpoints without a value head "
+            "restore everything else and initialize only that head"
         ),
         rich_help_panel="RL training",
     ),
@@ -357,6 +367,26 @@ def rl(
         raise typer.BadParameter("--seed must be in [0, 2^63)")
     output_dir = output_dir.resolve()
     rank = int(os.environ.get("RANK", "0"))
+    resume_step = 0
+    value_head_resume = "not requested"
+    if resume_training_state:
+        import torch
+
+        resume_checkpoint = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        required = ("optimizer", "scheduler", "rng_states", "step")
+        missing = [key for key in required if key not in resume_checkpoint]
+        if missing:
+            raise typer.BadParameter(f"resume checkpoint is missing fields: {missing}")
+        resume_step = int(resume_checkpoint["step"])
+        if resume_step >= iterations:
+            raise typer.BadParameter(
+                f"resume step {resume_step} must be below --iterations={iterations}"
+            )
+        value_head_resume = (
+            "restored"
+            if resume_checkpoint.get("training_state", {}).get("value_head") is not None
+            else "initialized fresh (legacy checkpoint)"
+        )
     if rank == 0 and output_dir.exists():
         if not output_dir.is_dir():
             raise typer.BadParameter(f"--output-dir is not a directory: {output_dir}")
@@ -370,6 +400,7 @@ def rl(
         lilly_rules_executable=lilly_rules_executable,
         verbose_tools=verbose_tools,
         evaluation_workers=evaluation_workers,
+        initial_generation=resume_step + 1,
     )
     config.install()
 
@@ -397,11 +428,14 @@ def rl(
                         "plus cumulative-Pareto-front bonus"
                     ),
                     "precision": precision,
+                    "resume_training_state": resume_training_state,
+                    "resumed_from_step": resume_step,
                     "save_final_checkpoint": save_final_checkpoint,
                     "seed": seed,
                     "temperature": temperature,
                     "temperature_final": temperature_final,
                     "warmup_steps": warmup_steps,
+                    "value_head_resume": value_head_resume,
                 },
                 indent=2,
                 sort_keys=True,
@@ -414,9 +448,7 @@ def rl(
         vocab_path=None,
         objectives_path="mtrl.objectives:build",
         reference_checkpoint_path=(
-            str(kl_reference_checkpoint.resolve())
-            if kl_reference_checkpoint is not None
-            else None
+            str(kl_reference_checkpoint.resolve()) if kl_reference_checkpoint is not None else None
         ),
         iterations=iterations,
         batch_size=batch_size,
@@ -434,4 +466,5 @@ def rl(
         checkpoint_dir=str(output_dir),
         wandb_project=wandb_project,
         seed=seed,
+        resume_training_state=resume_training_state,
     )
