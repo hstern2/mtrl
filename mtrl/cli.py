@@ -400,7 +400,6 @@ def rl(
         lilly_rules_executable=lilly_rules_executable,
         verbose_tools=verbose_tools,
         evaluation_workers=evaluation_workers,
-        initial_generation=resume_step + 1,
     )
     config.install()
 

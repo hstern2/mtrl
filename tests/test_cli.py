@@ -219,7 +219,7 @@ def test_rl_records_a_separate_kl_reference_checkpoint(tmp_path, monkeypatch) ->
     assert run_config["kl_reference_checkpoint"] == str(kl_reference.resolve())
 
 
-def test_rl_resumes_available_training_state_and_generation_number(tmp_path, monkeypatch) -> None:
+def test_rl_resumes_available_training_state(tmp_path, monkeypatch) -> None:
     import torch
 
     checkpoint = tmp_path / "policy.pt"
@@ -262,8 +262,6 @@ def test_rl_resumes_available_training_state_and_generation_number(tmp_path, mon
 
     assert result.exit_code == 0
     assert received["resume_training_state"] is True
-    scoring_config = json.loads((output / "scoring_config.json").read_text())
-    assert scoring_config["initial_generation"] == 376
     run_config = json.loads((output / "run_config.json").read_text())
     assert run_config["resumed_from_step"] == 375
     assert run_config["value_head_resume"] == "initialized fresh (legacy checkpoint)"

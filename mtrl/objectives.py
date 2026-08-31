@@ -55,7 +55,7 @@ class DockingObjectives(Objectives):
             decode_fn=decode_fn,
         )
         self.config = config
-        self.generation = config.initial_generation
+        self.generation = 1
         self.rank = int(os.environ.get("RANK", "0"))
         self.score_log = config.output_dir / "scores.jsonl"
         self.best_dir = config.output_dir / "best"
