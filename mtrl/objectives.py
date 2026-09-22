@@ -5,19 +5,25 @@ import json
 import os
 from collections.abc import Callable
 from csv import DictWriter
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 from rdkit import Chem
-from rdkit.Chem import Mol
+from rdkit.Chem import QED, Mol
 from trl.objectives.base import Objective, Objectives, ScoredItem
 from trl.objectives.pareto import nsga2_sort
 
 from mtrl import DecodedAMSR, decode_amsr, make_conformer
-from mtrl.config import ScoringConfig
+from mtrl.config import BoxScoringConfig, ScoringConfig, scoring_mode_from_env
 from mtrl.lilly import LillyMedchemFilter
-from mtrl.scoring import StructureScore, StructureScoringPipeline
+from mtrl.scoring import (
+    BoxDockingPipeline,
+    BoxDockingScore,
+    StructureScore,
+    StructureScoringPipeline,
+)
 
 
 class CNNaffinityObjective(Objective):
@@ -34,6 +40,33 @@ class RoshamboComboObjective(Objective):
 
     def score_batch(self, items: list[Any]) -> list[float]:
         return [float(item.roshambo_tanimoto_combo) for item in items]
+
+
+class BoxCNNaffinityObjective(Objective):
+    """CNNaffinity for one named receptor/box target."""
+
+    def __init__(self, target_name: str, failure_score: float = 0.0) -> None:
+        self.target_name = target_name
+        self.failure_score = failure_score
+        super().__init__(name=f"gnina_cnn_affinity__{target_name}", direction="maximize")
+
+    def score_batch(self, items: list[Any]) -> list[float]:
+        scores = []
+        for item in items:
+            result = item.targets[self.target_name]
+            affinity = result.cnn_affinity if result.accepted else None
+            scores.append(float(affinity) if affinity is not None else self.failure_score)
+        return scores
+
+
+class QEDObjective(Objective):
+    """RDKit quantitative estimate of drug-likeness."""
+
+    def __init__(self) -> None:
+        super().__init__(name="qed", direction="maximize")
+
+    def score_batch(self, items: list[Any]) -> list[float]:
+        return [float(QED.qed(item)) for item in items]
 
 
 class DockingObjectives(Objectives):
@@ -527,6 +560,365 @@ class DockingObjectives(Objectives):
         os.replace(temporary, output_path)
 
 
-def build() -> DockingObjectives:
+class BoxDockingObjectives(Objectives):
+    """Variable-dimensional Pareto suite for independent receptor/box dockings."""
+
+    def __init__(
+        self,
+        config: BoxScoringConfig,
+        *,
+        decode_fn: Callable[[list[str]], DecodedAMSR | None] = decode_amsr,
+        conformer_fn: Callable[[DecodedAMSR], Mol | None] = make_conformer,
+        pipeline: BoxDockingPipeline | None = None,
+        lilly_filter: LillyMedchemFilter | None = None,
+    ) -> None:
+        objectives: list[Objective] = [
+            BoxCNNaffinityObjective(target.name, config.target_failure_score)
+            for target in config.targets
+        ]
+        if config.qed_objective:
+            objectives.append(QEDObjective())
+        super().__init__(objectives=objectives, decode_fn=decode_fn)
+        self.config = config
+        self.generation = 1
+        self.rank = int(os.environ.get("RANK", "0"))
+        self.score_log = config.output_dir / "scores.jsonl"
+        self.best_dir = config.output_dir / "best"
+        self.generations_dir = config.output_dir / "generations"
+        self.progress_file = config.output_dir / "progress.csv"
+        self._progress: list[dict[str, Any]] = []
+        self._overall_front: list[dict[str, Any]] = []
+        if self.rank == 0:
+            self.best_dir.mkdir(parents=True, exist_ok=True)
+            self.generations_dir.mkdir(parents=True, exist_ok=True)
+        owns_pipeline = pipeline is None
+        self._pipeline_owns_conformer_construction = (
+            owns_pipeline and conformer_fn is make_conformer
+        )
+        self.conformer_fn = conformer_fn
+        self.pipeline = pipeline or BoxDockingPipeline(config)
+        if owns_pipeline:
+            atexit.register(self.close)
+        self.lilly_filter = lilly_filter
+        if config.lilly_medchem_rules and self.lilly_filter is None:
+            self.lilly_filter = LillyMedchemFilter(config.lilly_rules_executable)
+
+    def evaluate(self, token_sequences: list[list[str]]) -> list[ScoredItem]:
+        decoded = [self.decode_fn(sequence) for sequence in token_sequences]
+        items = [ScoredItem(token_ids=[]) for _ in decoded]
+        diagnostics: list[BoxDockingScore | None] = [None] * len(decoded)
+
+        candidate_indices = []
+        candidate_decoded = []
+        for index, candidate in enumerate(decoded):
+            if candidate is None:
+                items[index].valid = False
+                items[index].rejection_reason = "AMSR decode failed"
+                continue
+            if len(Chem.GetMolFrags(candidate.mol)) != 1:
+                items[index].valid = False
+                items[index].rejection_reason = "molecule is disconnected"
+                continue
+            candidate_indices.append(index)
+            candidate_decoded.append(candidate)
+
+        if self.lilly_filter is not None and candidate_decoded:
+            accepted = self.lilly_filter.accept_batch(
+                [candidate.mol for candidate in candidate_decoded]
+            )
+            retained_indices = []
+            retained_decoded = []
+            for index, candidate, passed in zip(
+                candidate_indices, candidate_decoded, accepted, strict=True
+            ):
+                if passed:
+                    retained_indices.append(index)
+                    retained_decoded.append(candidate)
+                else:
+                    items[index].valid = False
+                    items[index].rejection_reason = "Lilly Medchem Rules (-relaxed) failed"
+            candidate_indices = retained_indices
+            candidate_decoded = retained_decoded
+
+        conformer_indices = []
+        results: list[BoxDockingScore] = []
+        if self._pipeline_owns_conformer_construction and candidate_decoded:
+            evaluated = self.pipeline.evaluate_decoded_batch(candidate_decoded)
+            for index, (conformer, result) in zip(candidate_indices, evaluated, strict=True):
+                if conformer is None:
+                    items[index].valid = False
+                    items[index].rejection_reason = result.rejection_reason
+                    continue
+                conformer_indices.append(index)
+                results.append(result)
+        else:
+            candidate_mols = []
+            for index, candidate in zip(candidate_indices, candidate_decoded, strict=True):
+                conformer = self.conformer_fn(candidate)
+                if conformer is None:
+                    items[index].valid = False
+                    items[index].rejection_reason = "AMSR conformer construction failed"
+                    continue
+                conformer_indices.append(index)
+                candidate_mols.append(conformer)
+            results = self.pipeline.score_batch(candidate_mols) if candidate_mols else []
+
+        for index, result in zip(conformer_indices, results, strict=True):
+            diagnostics[index] = result
+            if not result.accepted:
+                items[index].valid = False
+                items[index].rejection_reason = result.rejection_reason
+                continue
+            candidate = decoded[index]
+            assert candidate is not None
+            for objective in self.objectives:
+                source = candidate.mol if isinstance(objective, QEDObjective) else result
+                items[index].scores[objective.name] = objective.score_batch([source])[0]
+
+        payload = {
+            "scores": self._score_records(token_sequences, decoded, items, diagnostics),
+            "accepted": self._accepted_records(token_sequences, decoded, items, diagnostics),
+        }
+        gathered = DockingObjectives._gather_output(payload)
+        score_records = [record for part in gathered for record in part["scores"]]
+        accepted_records = [record for part in gathered for record in part["accepted"]]
+        for molecule_number, record in enumerate(accepted_records, start=1):
+            record["name"] = f"generation_{record['generation']:06d}_molecule_{molecule_number:04d}"
+        self._overall_front = self._pareto_front([*self._overall_front, *accepted_records])
+        if self.rank == 0:
+            if score_records:
+                self._append_scores(score_records)
+            self._write_outputs(accepted_records)
+            self._write_progress(score_records, accepted_records)
+        self.generation += 1
+        return items
+
+    def _score_records(
+        self,
+        token_sequences: list[list[str]],
+        decoded: list[DecodedAMSR | None],
+        items: list[ScoredItem],
+        diagnostics: list[BoxDockingScore | None],
+    ) -> list[dict[str, Any]]:
+        records = []
+        for index, (tokens, candidate, item, diagnostic) in enumerate(
+            zip(token_sequences, decoded, items, diagnostics, strict=True)
+        ):
+            target_diagnostics = {}
+            if diagnostic is not None:
+                target_diagnostics = {
+                    name: result.to_record() for name, result in diagnostic.targets.items()
+                }
+            records.append(
+                {
+                    "generation": self.generation,
+                    "rank": self.rank,
+                    "index": index,
+                    "amsr": "".join(tokens),
+                    "smiles": (
+                        Chem.MolToSmiles(candidate.mol, isomericSmiles=True)
+                        if candidate is not None
+                        else None
+                    ),
+                    "accepted": item.valid,
+                    "rejection_reason": item.rejection_reason,
+                    "objectives": dict(item.scores),
+                    "targets": target_diagnostics,
+                }
+            )
+        return records
+
+    def _accepted_records(
+        self,
+        token_sequences: list[list[str]],
+        decoded: list[DecodedAMSR | None],
+        items: list[ScoredItem],
+        diagnostics: list[BoxDockingScore | None],
+    ) -> list[dict[str, Any]]:
+        records = []
+        for index, (tokens, candidate, item, diagnostic) in enumerate(
+            zip(token_sequences, decoded, items, diagnostics, strict=True)
+        ):
+            if not item.valid or candidate is None or diagnostic is None:
+                continue
+            pose_blocks = {}
+            target_metadata = {}
+            for target_name, result in diagnostic.targets.items():
+                if result.accepted and result.pose is not None:
+                    pose_blocks[target_name] = Chem.MolToMolBlock(result.pose)
+                target_metadata[target_name] = result.to_record()
+            records.append(
+                {
+                    "generation": self.generation,
+                    "rank": self.rank,
+                    "index": index,
+                    "amsr": "".join(tokens),
+                    "smiles": Chem.MolToSmiles(candidate.mol, isomericSmiles=True),
+                    "scores": dict(item.scores),
+                    "targets": target_metadata,
+                    "pose_blocks": pose_blocks,
+                }
+            )
+        return records
+
+    def _pareto_front(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not records:
+            return []
+        objective_names = [objective.name for objective in self.objectives]
+        scores = np.asarray(
+            [[record["scores"][name] for name in objective_names] for record in records],
+            dtype=float,
+        )
+        fronts, _ = nsga2_sort(scores)
+        front = [records[index] for index in fronts[0]]
+        unique = {
+            (record["amsr"], *(record["scores"][name] for name in objective_names)): record
+            for record in front
+        }
+        return sorted(
+            unique.values(),
+            key=lambda record: (
+                *(-record["scores"][name] for name in objective_names),
+                record["amsr"],
+            ),
+        )
+
+    def _append_scores(self, records: list[dict[str, Any]]) -> None:
+        self.config.output_dir.mkdir(parents=True, exist_ok=True)
+        with self.score_log.open("a") as output:
+            for record in records:
+                output.write(json.dumps(record, sort_keys=True) + "\n")
+
+    def _write_outputs(self, accepted: list[dict[str, Any]]) -> None:
+        if accepted:
+            generation_dir = self.generations_dir / f"generation_{self.generation:06d}"
+            generation_dir.mkdir(parents=True, exist_ok=True)
+            self._write_target_sdfs(generation_dir, accepted)
+            generation_front = self._pareto_front(accepted)
+            if generation_front:
+                front_dir = self.best_dir / f"generation_{self.generation:06d}"
+                front_dir.mkdir(parents=True, exist_ok=True)
+                self._write_target_sdfs(front_dir, generation_front)
+        if self._overall_front:
+            overall_dir = self.best_dir / "overall"
+            overall_dir.mkdir(parents=True, exist_ok=True)
+            self._write_target_sdfs(overall_dir, self._overall_front)
+
+    def _write_target_sdfs(
+        self, directory: os.PathLike[str], records: list[dict[str, Any]]
+    ) -> None:
+        directory = Path(directory)
+        for target in self.config.targets:
+            output = directory / f"{target.name}.sdf"
+            pose_records = [record for record in records if target.name in record["pose_blocks"]]
+            if not pose_records:
+                output.unlink(missing_ok=True)
+                continue
+            temporary = output.with_suffix(".sdf.tmp")
+            writer = Chem.SDWriter(str(temporary))
+            try:
+                for record in pose_records:
+                    mol = Chem.MolFromMolBlock(record["pose_blocks"][target.name], removeHs=False)
+                    if mol is None:
+                        continue
+                    mol.SetProp("_Name", record["name"])
+                    mol.SetProp("AMSR", record["amsr"])
+                    mol.SetProp("SMILES", record["smiles"])
+                    mol.SetProp("docking_target", target.name)
+                    for objective_name, value in record["scores"].items():
+                        mol.SetProp(objective_name, str(value))
+                    for key, value in record["targets"][target.name].items():
+                        if value is not None:
+                            encoded = (
+                                json.dumps(value, sort_keys=True)
+                                if isinstance(value, dict)
+                                else value
+                            )
+                            mol.SetProp(f"selected_pose_{key}", str(encoded))
+                    writer.write(mol)
+            finally:
+                writer.close()
+            os.replace(temporary, output)
+
+    def _write_progress(
+        self, score_records: list[dict[str, Any]], accepted: list[dict[str, Any]]
+    ) -> None:
+        prior_generated = int(self._progress[-1]["cumulative_generated"]) if self._progress else 0
+        prior_accepted = int(self._progress[-1]["cumulative_accepted"]) if self._progress else 0
+        reasons = [record["rejection_reason"] for record in score_records if not record["accepted"]]
+        row: dict[str, Any] = {
+            "generation": self.generation,
+            "generated": len(score_records),
+            "cumulative_generated": prior_generated + len(score_records),
+            "accepted": len(accepted),
+            "accepted_percent": 100.0 * len(accepted) / max(1, len(score_records)),
+            "cumulative_accepted": prior_accepted + len(accepted),
+            "decode_failed": reasons.count("AMSR decode failed"),
+            "disconnected_failed": reasons.count("molecule is disconnected"),
+            "lilly_failed": sum(reason.startswith("Lilly Medchem Rules") for reason in reasons),
+            "conformer_failed": reasons.count("AMSR conformer construction failed"),
+            "all_targets_accepted": sum(
+                record["accepted"]
+                and record["targets"]
+                and all(
+                    record["targets"].get(target.name, {}).get("accepted", False)
+                    for target in self.config.targets
+                )
+                for record in score_records
+            ),
+        }
+        for target in self.config.targets:
+            row[f"{target.name}_failed"] = sum(
+                target.name in record["targets"] and not record["targets"][target.name]["accepted"]
+                for record in score_records
+            )
+        for objective in self.objectives:
+            values = [float(record["scores"][objective.name]) for record in accepted]
+            row[f"mean_{objective.name}"] = float(np.mean(values)) if values else None
+            row[f"best_{objective.name}"] = max(values) if values else None
+        self._progress.append(row)
+        write_header = not self.progress_file.exists()
+        with self.progress_file.open("a", newline="") as output:
+            writer = DictWriter(output, fieldnames=list(row))
+            if write_header:
+                writer.writeheader()
+            writer.writerow(row)
+        self._write_summary()
+
+    def _write_summary(self) -> None:
+        latest = self._progress[-1]
+        lines = [
+            "mtrl box-docking RL summary",
+            "",
+            f"Generations: {len(self._progress):,}",
+            f"Strings generated: {int(latest['cumulative_generated']):,}",
+            f"Passed at least one target gate: {int(latest['cumulative_accepted']):,}",
+            f"Passed every target gate (latest generation): "
+            f"{int(latest['all_targets_accepted']):,}",
+            f"Cumulative Pareto-front size: {len(self._overall_front):,}",
+            "",
+            "Latest-generation objective scores:",
+        ]
+        for objective in self.objectives:
+            mean = latest[f"mean_{objective.name}"]
+            best = latest[f"best_{objective.name}"]
+            lines.append(
+                f"  {objective.name}: mean={float(mean):.3f}, best={float(best):.3f}"
+                if mean is not None and best is not None
+                else f"  {objective.name}: n/a"
+            )
+        output = self.config.output_dir / "summary.txt"
+        temporary = output.with_suffix(".txt.tmp")
+        temporary.write_text("\n".join(lines) + "\n")
+        os.replace(temporary, output)
+
+    def close(self) -> None:
+        self.pipeline.close()
+
+
+def build() -> DockingObjectives | BoxDockingObjectives:
     """Factory loaded by trl after `mtrl rl` installs its scoring configuration."""
+    mode = scoring_mode_from_env()
+    if mode == "box_docking":
+        return BoxDockingObjectives(BoxScoringConfig.from_env())
     return DockingObjectives(ScoringConfig.from_env())

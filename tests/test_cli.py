@@ -20,6 +20,8 @@ def test_short_help_option() -> None:
     assert result.exit_code == 0
     assert "generate" in result.stdout
     assert "rl" in result.stdout
+    assert "score" in result.stdout
+    assert "validate-targets" in result.stdout
     assert "evaluate" not in result.stdout
     assert "default: 0" not in result.stdout
 
@@ -47,7 +49,8 @@ def test_rl_help_explains_training_and_output_options() -> None:
     for explanation in (
         "initial policy",
         "regularization",
-        "GNINA's minimization box",
+        "GNINA's",
+        "minimization box",
         "Worker processes used concurrently",
         "Final RL iteration",
         "Restore optimizer",
@@ -265,3 +268,168 @@ def test_rl_resumes_available_training_state(tmp_path, monkeypatch) -> None:
     run_config = json.loads((output / "run_config.json").read_text())
     assert run_config["resumed_from_step"] == 375
     assert run_config["value_head_resume"] == "initialized fresh (legacy checkpoint)"
+
+
+def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
+    checkpoint = tmp_path / "policy.pt"
+    receptor = tmp_path / "receptor.pdb"
+    targets = tmp_path / "targets.json"
+    output = tmp_path / "output"
+    checkpoint.touch()
+    receptor.write_text("END\n")
+    targets.write_text(
+        json.dumps(
+            {
+                "targets": [
+                    {
+                        "name": "q_open",
+                        "receptor_pdb": "receptor.pdb",
+                        "center": [1, 2, 3],
+                        "size": [20, 20, 20],
+                    }
+                ]
+            }
+        )
+    )
+    received = {}
+    monkeypatch.setattr("trl.training.rl_train.rl_train", lambda **kwargs: received.update(kwargs))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "rl",
+            str(checkpoint),
+            "--docking-targets",
+            str(targets),
+            "--lilly-medchem-rules",
+            "--target-failure-score",
+            "-1.5",
+            "--accept-targets",
+            "all",
+            "--docking-mode",
+            "rigid-refine",
+            "--gnina-timeout-seconds",
+            "300",
+            "--posebusters-timeout-seconds",
+            "90",
+            "--posebusters-config",
+            "dock-fast",
+            "--qed-objective",
+            "--output-dir",
+            str(output),
+            "--iterations",
+            "1",
+            "--checkpoint-every",
+            "0",
+            "--no-save-final-checkpoint",
+        ],
+    )
+
+    assert result.exit_code == 0
+    scoring_config = json.loads((output / "scoring_config.json").read_text())
+    assert scoring_config["mode"] == "box_docking"
+    assert scoring_config["targets"][0]["name"] == "q_open"
+    assert scoring_config["lilly_medchem_rules"] is True
+    assert scoring_config["target_failure_score"] == -1.5
+    assert scoring_config["accept_targets"] == "all"
+    assert scoring_config["docking_mode"] == "rigid-refine"
+    assert scoring_config["gnina_timeout_seconds"] == 300
+    assert scoring_config["posebusters_timeout_seconds"] == 90
+    assert scoring_config["posebusters_config"] == "dock-fast"
+    assert scoring_config["qed_objective"] is True
+    run_config = json.loads((output / "run_config.json").read_text())
+    assert "N-dimensional Pareto" in run_config["reward"]
+    assert received["objectives_path"] == "mtrl.objectives:build"
+
+
+def test_validate_targets_reports_named_boxes(tmp_path) -> None:
+    receptor = tmp_path / "receptor.pdb"
+    receptor.write_text("END\n")
+    targets = tmp_path / "targets.json"
+    targets.write_text(
+        json.dumps(
+            {
+                "targets": [
+                    {
+                        "name": "site_a",
+                        "receptor_pdb": "receptor.pdb",
+                        "center": [1, 2, 3],
+                        "size": [20, 21, 22],
+                    }
+                ]
+            }
+        )
+    )
+
+    result = CliRunner().invoke(app, ["validate-targets", str(targets)])
+
+    assert result.exit_code == 0
+    assert "Valid target manifest: 1 target(s)" in result.stdout
+    assert "site_a" in result.stdout
+    assert "center=(1.0, 2.0, 3.0)" in result.stdout
+
+
+def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -> None:
+    molecules = tmp_path / "molecules.sdf"
+    receptor = tmp_path / "receptor.pdb"
+    targets = tmp_path / "targets.json"
+    output = tmp_path / "scored"
+    molecules.write_text("$$$$\n")
+    receptor.write_text("END\n")
+    targets.write_text(
+        json.dumps(
+            {
+                "targets": [
+                    {
+                        "name": "site_a",
+                        "receptor_pdb": "receptor.pdb",
+                        "center": [1, 2, 3],
+                        "size": [20, 20, 20],
+                    }
+                ]
+            }
+        )
+    )
+    received = {}
+
+    def fake_score_sdf(input_sdf, config):
+        received["input_sdf"] = input_sdf
+        received["config"] = config
+        return {"input_records": 1, "retained_molecules": 1}
+
+    monkeypatch.setattr("mtrl.box_score.score_sdf", fake_score_sdf)
+    result = CliRunner().invoke(
+        app,
+        [
+            "score",
+            str(molecules),
+            "--docking-targets",
+            str(targets),
+            "--target-failure-score",
+            "-2",
+            "--accept-targets",
+            "any",
+            "--docking-mode",
+            "rigid-refine",
+            "--gnina-timeout-seconds",
+            "300",
+            "--posebusters-timeout-seconds",
+            "90",
+            "--posebusters-config",
+            "dock-fast",
+            "--qed-objective",
+            "--output-dir",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert received["input_sdf"] == molecules.resolve()
+    assert received["config"].target_failure_score == -2.0
+    assert received["config"].accept_targets == "any"
+    assert received["config"].docking_mode == "rigid-refine"
+    assert received["config"].gnina_timeout_seconds == 300
+    assert received["config"].posebusters_timeout_seconds == 90
+    assert received["config"].posebusters_config == "dock-fast"
+    assert received["config"].qed_objective is True
+    assert '"retained_molecules": 1' in result.stdout

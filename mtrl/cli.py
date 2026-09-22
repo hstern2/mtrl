@@ -1,8 +1,10 @@
 import json
+import math
 import os
 import secrets
 import sys
 from pathlib import Path
+from typing import cast
 
 import typer
 
@@ -21,6 +23,156 @@ app = typer.Typer(
     add_completion=False,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
+
+
+@app.command("validate-targets")
+def validate_targets(
+    targets_json: Path = typer.Argument(
+        ...,
+        exists=True,
+        dir_okay=False,
+        help="Portable JSON manifest containing named receptor/box targets",
+    ),
+) -> None:
+    """Validate a receptor/box target manifest without running docking."""
+    from mtrl.config import load_docking_targets
+
+    try:
+        targets = load_docking_targets(targets_json.resolve())
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        raise typer.BadParameter(str(error), param_hint="targets_json") from error
+    typer.echo(f"Valid target manifest: {len(targets)} target(s)")
+    for target in targets:
+        typer.echo(
+            f"{target.name}: receptor={target.receptor_pdb} "
+            f"center={target.center} size={target.size} "
+            f"exhaustiveness={target.exhaustiveness} num_modes={target.num_modes}"
+        )
+
+
+@app.command()
+def score(
+    molecules_sdf: Path = typer.Argument(
+        ...,
+        exists=True,
+        dir_okay=False,
+        help="Existing molecules with 3D coordinates in SDF format",
+    ),
+    docking_targets: Path = typer.Option(
+        ...,
+        "--docking-targets",
+        exists=True,
+        dir_okay=False,
+        help="JSON file containing named receptor/center/size targets",
+    ),
+    output_dir: Path = typer.Option(
+        Path("mtrl_scored/"),
+        "--output-dir",
+        help="Empty directory for scores, selected poses, and configuration",
+    ),
+    target_failure_score: float = typer.Option(
+        0.0,
+        "--target-failure-score",
+        help="Objective value assigned to a target with no valid pose",
+    ),
+    accept_targets: str = typer.Option(
+        "any",
+        "--accept-targets",
+        help="Retain a molecule when 'any' or 'all' targets have a valid pose",
+    ),
+    docking_mode: str = typer.Option(
+        "flexible",
+        "--docking-mode",
+        help=(
+            "Docking workflow: 'flexible', 'rigid', or 'rigid-refine' "
+            "(rigid placement without CNN scoring, then GNINA minimization/rescoring)"
+        ),
+    ),
+    gnina_timeout_seconds: int = typer.Option(
+        600,
+        "--gnina-timeout-seconds",
+        help="Maximum wall time for each GNINA docking or minimization call",
+    ),
+    posebusters_timeout_seconds: int = typer.Option(
+        600,
+        "--posebusters-timeout-seconds",
+        help="Maximum wall time for each receptor-aware PoseBusters call",
+    ),
+    posebusters_config: str = typer.Option(
+        "dock",
+        "--posebusters-config",
+        help="PoseBusters checks: 'dock' or 'dock-fast' (omits ETKDG energy ratio)",
+    ),
+    qed_objective: bool = typer.Option(
+        False,
+        "--qed-objective/--no-qed-objective",
+        help="Include RDKit QED in reported objective scores",
+    ),
+    evaluation_workers: int = typer.Option(
+        _CLI_EVALUATION_WORKERS,
+        "--evaluation-workers",
+        help="Worker processes used concurrently for GNINA and PoseBusters",
+    ),
+    lilly_medchem_rules: bool = typer.Option(
+        False,
+        "--lilly-medchem-rules/--no-lilly-medchem-rules",
+        help="Apply Lilly Medchem Rules in -relaxed mode before docking",
+    ),
+    lilly_rules_executable: str = typer.Option(
+        "Lilly_Medchem_Rules.rb",
+        "--lilly-rules-executable",
+        help="Command name or path for Lilly_Medchem_Rules.rb",
+    ),
+    verbose_tools: bool = typer.Option(
+        False,
+        help="Show GNINA and PoseBusters output",
+    ),
+) -> None:
+    """Dock and score existing 3D molecules without running RL."""
+    from mtrl.box_score import score_sdf
+    from mtrl.config import (
+        BoxScoringConfig,
+        DockingMode,
+        PoseBustersConfig,
+        TargetAcceptance,
+        load_docking_targets,
+    )
+
+    if evaluation_workers <= 0:
+        raise typer.BadParameter("--evaluation-workers must be > 0")
+    if gnina_timeout_seconds <= 0:
+        raise typer.BadParameter("--gnina-timeout-seconds must be > 0")
+    if posebusters_timeout_seconds <= 0:
+        raise typer.BadParameter("--posebusters-timeout-seconds must be > 0")
+    if posebusters_config not in {"dock", "dock-fast"}:
+        raise typer.BadParameter("--posebusters-config must be 'dock' or 'dock-fast'")
+    if accept_targets not in {"any", "all"}:
+        raise typer.BadParameter("--accept-targets must be 'any' or 'all'")
+    if docking_mode not in {"flexible", "rigid", "rigid-refine"}:
+        raise typer.BadParameter("--docking-mode must be 'flexible', 'rigid', or 'rigid-refine'")
+    if not math.isfinite(target_failure_score):
+        raise typer.BadParameter("--target-failure-score must be finite")
+    try:
+        targets = load_docking_targets(docking_targets.resolve())
+        config = BoxScoringConfig(
+            targets=targets,
+            output_dir=output_dir.resolve(),
+            lilly_medchem_rules=lilly_medchem_rules,
+            lilly_rules_executable=lilly_rules_executable,
+            verbose_tools=verbose_tools,
+            evaluation_workers=evaluation_workers,
+            target_failure_score=target_failure_score,
+            accept_targets=cast(TargetAcceptance, accept_targets),
+            docking_mode=cast(DockingMode, docking_mode),
+            gnina_timeout_seconds=gnina_timeout_seconds,
+            qed_objective=qed_objective,
+            posebusters_config=cast(PoseBustersConfig, posebusters_config),
+            posebusters_timeout_seconds=posebusters_timeout_seconds,
+        )
+        summary = score_sdf(molecules_sdf.resolve(), config)
+    except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(json.dumps(summary, indent=2, sort_keys=True))
 
 
 @app.command()
@@ -156,20 +308,79 @@ def rl(
         ),
         rich_help_panel="RL training",
     ),
-    receptor_pdb: Path = typer.Option(
-        ...,
+    receptor_pdb: Path | None = typer.Option(
+        None,
         "--receptor-pdb",
         exists=True,
         dir_okay=False,
-        help="Target receptor passed to GNINA and receptor-aware PoseBusters checks",
+        help=(
+            "Legacy reference-minimization receptor; use with --reference-sdf, "
+            "or use --docking-targets for full box docking"
+        ),
         rich_help_panel="Scoring inputs",
     ),
-    reference_sdf: Path = typer.Option(
-        ...,
+    reference_sdf: Path | None = typer.Option(
+        None,
         "--reference-sdf",
         exists=True,
         dir_okay=False,
-        help=("3D reference ligand used for Roshambo2 alignment and as GNINA's minimization box"),
+        help=("Legacy 3D ligand used as GNINA's minimization box and for Roshambo2 alignment"),
+        rich_help_panel="Scoring inputs",
+    ),
+    docking_targets: Path | None = typer.Option(
+        None,
+        "--docking-targets",
+        exists=True,
+        dir_okay=False,
+        help=(
+            "JSON file containing named receptor/center/size targets; each target "
+            "becomes an independent full-docking CNNaffinity objective"
+        ),
+        rich_help_panel="Scoring inputs",
+    ),
+    target_failure_score: float = typer.Option(
+        0.0,
+        "--target-failure-score",
+        help="Box mode: objective value assigned to a target with no valid pose",
+        rich_help_panel="Scoring inputs",
+    ),
+    accept_targets: str = typer.Option(
+        "any",
+        "--accept-targets",
+        help="Box mode: retain a molecule when 'any' or 'all' targets have a valid pose",
+        rich_help_panel="Scoring inputs",
+    ),
+    docking_mode: str = typer.Option(
+        "flexible",
+        "--docking-mode",
+        help=(
+            "Box mode: 'flexible', 'rigid', or 'rigid-refine' (rigid placement "
+            "without CNN scoring, then GNINA minimization/rescoring)"
+        ),
+        rich_help_panel="Scoring inputs",
+    ),
+    gnina_timeout_seconds: int = typer.Option(
+        600,
+        "--gnina-timeout-seconds",
+        help="Box mode: maximum wall time for each GNINA docking or minimization call",
+        rich_help_panel="Scoring inputs",
+    ),
+    posebusters_timeout_seconds: int = typer.Option(
+        600,
+        "--posebusters-timeout-seconds",
+        help="Box mode: maximum wall time for each receptor-aware PoseBusters call",
+        rich_help_panel="Scoring inputs",
+    ),
+    posebusters_config: str = typer.Option(
+        "dock",
+        "--posebusters-config",
+        help="Box mode: 'dock' or 'dock-fast' (omits ETKDG energy ratio)",
+        rich_help_panel="Scoring inputs",
+    ),
+    qed_objective: bool = typer.Option(
+        False,
+        "--qed-objective/--no-qed-objective",
+        help="Box mode: add RDKit QED as an independent Pareto objective",
         rich_help_panel="Scoring inputs",
     ),
     evaluation_workers: int = typer.Option(
@@ -177,7 +388,7 @@ def rl(
         "--evaluation-workers",
         help=(
             "Worker processes used concurrently for AMSR conformer construction, "
-            "Roshambo2 alignment, GNINA minimization, and PoseBusters"
+            "GNINA evaluation, and PoseBusters"
         ),
         rich_help_panel="Parallel evaluation",
     ),
@@ -249,9 +460,9 @@ def rl(
     pareto_lambda: float = typer.Option(
         0.1,
         help=(
-            "Bonus for a molecule that adds a new point to the cumulative "
-            "affinity/similarity Pareto front; absolute joint quality supplies the "
-            "base reward"
+            "Pareto diversity weight: a cumulative-front bonus in reference mode "
+            "and a crowding-distance bonus in explicit-box mode; absolute joint "
+            "quality supplies the reference-mode base reward"
         ),
         rich_help_panel="RL training",
     ),
@@ -331,10 +542,17 @@ def rl(
         rich_help_panel="Output and logging",
     ),
 ) -> None:
-    """Pareto RL using GNINA affinity and Roshambo2 shape/color similarity."""
+    """Molecular Pareto RL with reference minimization or explicit-box docking."""
     from trl.training.rl_train import rl_train
 
-    from mtrl.config import ScoringConfig
+    from mtrl.config import (
+        BoxScoringConfig,
+        DockingMode,
+        PoseBustersConfig,
+        ScoringConfig,
+        TargetAcceptance,
+        load_docking_targets,
+    )
 
     for name, value in (
         ("--iterations", iterations),
@@ -344,6 +562,8 @@ def rl(
         ("--temperature-final", temperature_final),
         ("--log-every", log_every),
         ("--evaluation-workers", evaluation_workers),
+        ("--gnina-timeout-seconds", gnina_timeout_seconds),
+        ("--posebusters-timeout-seconds", posebusters_timeout_seconds),
     ):
         if value <= 0:
             raise typer.BadParameter(f"{name} must be > 0")
@@ -365,6 +585,22 @@ def rl(
         seed = secrets.randbits(63)
     if seed < 0 or seed >= 2**63:
         raise typer.BadParameter("--seed must be in [0, 2^63)")
+    if accept_targets not in {"any", "all"}:
+        raise typer.BadParameter("--accept-targets must be 'any' or 'all'")
+    if docking_mode not in {"flexible", "rigid", "rigid-refine"}:
+        raise typer.BadParameter("--docking-mode must be 'flexible', 'rigid', or 'rigid-refine'")
+    if posebusters_config not in {"dock", "dock-fast"}:
+        raise typer.BadParameter("--posebusters-config must be 'dock' or 'dock-fast'")
+    if not math.isfinite(target_failure_score):
+        raise typer.BadParameter("--target-failure-score must be finite")
+    if docking_targets is not None and (receptor_pdb is not None or reference_sdf is not None):
+        raise typer.BadParameter(
+            "--docking-targets cannot be combined with --receptor-pdb or --reference-sdf"
+        )
+    if docking_targets is None and (receptor_pdb is None or reference_sdf is None):
+        raise typer.BadParameter(
+            "provide --docking-targets, or provide both --receptor-pdb and --reference-sdf"
+        )
     output_dir = output_dir.resolve()
     rank = int(os.environ.get("RANK", "0"))
     resume_step = 0
@@ -392,15 +628,42 @@ def rl(
             raise typer.BadParameter(f"--output-dir is not a directory: {output_dir}")
         if any(output_dir.iterdir()):
             raise typer.BadParameter(f"--output-dir must be empty: {output_dir}")
-    config = ScoringConfig(
-        receptor_pdb=receptor_pdb.resolve(),
-        reference_sdf=reference_sdf.resolve(),
-        output_dir=output_dir,
-        lilly_medchem_rules=lilly_medchem_rules,
-        lilly_rules_executable=lilly_rules_executable,
-        verbose_tools=verbose_tools,
-        evaluation_workers=evaluation_workers,
-    )
+    if docking_targets is not None:
+        try:
+            targets = load_docking_targets(docking_targets.resolve())
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise typer.BadParameter(str(error), param_hint="--docking-targets") from error
+        config: ScoringConfig | BoxScoringConfig = BoxScoringConfig(
+            targets=targets,
+            output_dir=output_dir,
+            lilly_medchem_rules=lilly_medchem_rules,
+            lilly_rules_executable=lilly_rules_executable,
+            verbose_tools=verbose_tools,
+            evaluation_workers=evaluation_workers,
+            target_failure_score=target_failure_score,
+            accept_targets=cast(TargetAcceptance, accept_targets),
+            docking_mode=cast(DockingMode, docking_mode),
+            gnina_timeout_seconds=gnina_timeout_seconds,
+            qed_objective=qed_objective,
+            posebusters_config=cast(PoseBustersConfig, posebusters_config),
+            posebusters_timeout_seconds=posebusters_timeout_seconds,
+        )
+        reward_description = "global-batch N-dimensional Pareto rank and crowding distance"
+    else:
+        assert receptor_pdb is not None and reference_sdf is not None
+        config = ScoringConfig(
+            receptor_pdb=receptor_pdb.resolve(),
+            reference_sdf=reference_sdf.resolve(),
+            output_dir=output_dir,
+            lilly_medchem_rules=lilly_medchem_rules,
+            lilly_rules_executable=lilly_rules_executable,
+            verbose_tools=verbose_tools,
+            evaluation_workers=evaluation_workers,
+        )
+        reward_description = (
+            "reference-normalized CNNaffinity * Tanimoto similarity, "
+            "plus cumulative-Pareto-front bonus"
+        )
     config.install()
 
     if rank == 0:
@@ -412,9 +675,21 @@ def rl(
             json.dumps(
                 {
                     "batch_size": batch_size,
+                    "accept_targets": accept_targets if docking_targets is not None else None,
                     "checkpoint": str(checkpoint.resolve()),
                     "checkpoint_every": checkpoint_every,
+                    "docking_mode": docking_mode if docking_targets is not None else None,
                     "evaluation_workers": evaluation_workers,
+                    "gnina_timeout_seconds": (
+                        gnina_timeout_seconds if docking_targets is not None else None
+                    ),
+                    "posebusters_timeout_seconds": (
+                        posebusters_timeout_seconds if docking_targets is not None else None
+                    ),
+                    "posebusters_config": (
+                        posebusters_config if docking_targets is not None else None
+                    ),
+                    "qed_objective": qed_objective if docking_targets is not None else None,
                     "iterations": iterations,
                     "kl_beta": kl_beta,
                     "kl_reference_checkpoint": str(kl_reference_checkpoint.resolve())
@@ -422,10 +697,7 @@ def rl(
                     else str(checkpoint.resolve()),
                     "lr": lr,
                     "pareto_lambda": pareto_lambda,
-                    "reward": (
-                        "reference-normalized CNNaffinity * Tanimoto similarity, "
-                        "plus cumulative-Pareto-front bonus"
-                    ),
+                    "reward": reward_description,
                     "precision": precision,
                     "resume_training_state": resume_training_state,
                     "resumed_from_step": resume_step,
@@ -433,6 +705,9 @@ def rl(
                     "seed": seed,
                     "temperature": temperature,
                     "temperature_final": temperature_final,
+                    "target_failure_score": (
+                        target_failure_score if docking_targets is not None else None
+                    ),
                     "warmup_steps": warmup_steps,
                     "value_head_resume": value_head_resume,
                 },
