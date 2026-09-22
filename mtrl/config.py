@@ -57,30 +57,57 @@ class DockingTarget:
         }
 
     @classmethod
-    def from_dict(cls, values: dict[str, Any], *, base_dir: Path | None = None) -> DockingTarget:
+    def from_dict(cls, values: object, *, base_dir: Path | None = None) -> DockingTarget:
+        if not isinstance(values, dict):
+            raise ValueError("each docking target must be a JSON object")
         required = {"name", "receptor_pdb", "center", "size"}
         missing = sorted(required - values.keys())
         if missing:
             raise ValueError(f"docking target is missing fields: {', '.join(missing)}")
-        receptor = Path(values["receptor_pdb"])
+
+        name = values["name"]
+        if not isinstance(name, str):
+            raise ValueError("docking target name must be a string")
+        receptor_value = values["receptor_pdb"]
+        if not isinstance(receptor_value, str) or not receptor_value:
+            raise ValueError(f"docking target {name!r} receptor_pdb must be a path string")
+        receptor = Path(receptor_value)
         if base_dir is not None and not receptor.is_absolute():
             receptor = base_dir / receptor
-        center_values = tuple(float(value) for value in values["center"])
-        size_values = tuple(float(value) for value in values["size"])
-        if len(center_values) != 3:
-            raise ValueError("docking target center must contain three numbers")
-        if len(size_values) != 3:
-            raise ValueError("docking target size must contain three numbers")
+        center = _numeric_triplet(values["center"], target_name=name, field="center")
+        size = _numeric_triplet(values["size"], target_name=name, field="size")
+        exhaustiveness = _positive_int(
+            values.get("exhaustiveness", 8), target_name=name, field="exhaustiveness"
+        )
+        num_modes = _positive_int(values.get("num_modes", 9), target_name=name, field="num_modes")
         target = cls(
-            name=str(values["name"]),
+            name=name,
             receptor_pdb=receptor.resolve(),
-            center=(center_values[0], center_values[1], center_values[2]),
-            size=(size_values[0], size_values[1], size_values[2]),
-            exhaustiveness=int(values.get("exhaustiveness", 8)),
-            num_modes=int(values.get("num_modes", 9)),
+            center=center,
+            size=size,
+            exhaustiveness=exhaustiveness,
+            num_modes=num_modes,
         )
         target.validate()
         return target
+
+
+def _numeric_triplet(value: object, *, target_name: str, field: str) -> tuple[float, float, float]:
+    message = f"docking target {target_name!r} {field} must be an array of three numbers"
+    if not isinstance(value, list) or len(value) != 3:
+        raise ValueError(message)
+    if any(isinstance(item, bool) or not isinstance(item, int | float) for item in value):
+        raise ValueError(message)
+    result = (float(value[0]), float(value[1]), float(value[2]))
+    if not all(math.isfinite(item) for item in result):
+        raise ValueError(f"docking target {target_name!r} {field} values must be finite")
+    return result
+
+
+def _positive_int(value: object, *, target_name: str, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"docking target {target_name!r} {field} must be a positive integer")
+    return value
 
 
 @dataclass(frozen=True)

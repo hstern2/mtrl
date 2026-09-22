@@ -77,6 +77,41 @@ def test_target_manifest_loads_relative_receptors(tmp_path) -> None:
     assert target.num_modes == 5
 
 
+@pytest.mark.parametrize(
+    ("target_update", "message"),
+    [
+        ({"name": 7}, "name must be a string"),
+        ({"center": "123"}, "center must be an array of three numbers"),
+        ({"size": [20, True, 20]}, "size must be an array of three numbers"),
+        ({"exhaustiveness": 2.5}, "exhaustiveness must be a positive integer"),
+        ({"num_modes": 0}, "num_modes must be a positive integer"),
+    ],
+)
+def test_target_manifest_rejects_malformed_fields(tmp_path, target_update, message) -> None:
+    receptor = tmp_path / "receptor.pdb"
+    receptor.write_text("END\n")
+    target = {
+        "name": "site_a",
+        "receptor_pdb": "receptor.pdb",
+        "center": [1, 2, 3],
+        "size": [20, 20, 20],
+    }
+    target.update(target_update)
+    manifest = tmp_path / "targets.json"
+    manifest.write_text(json.dumps({"targets": [target]}))
+
+    with pytest.raises(ValueError, match=message):
+        load_docking_targets(manifest)
+
+
+def test_target_manifest_requires_target_objects(tmp_path) -> None:
+    manifest = tmp_path / "targets.json"
+    manifest.write_text(json.dumps({"targets": ["not-an-object"]}))
+
+    with pytest.raises(ValueError, match="each docking target must be a JSON object"):
+        load_docking_targets(manifest)
+
+
 def test_best_affinity_is_selected_only_from_posebusters_passing_poses(tmp_path) -> None:
     output = tmp_path / "poses.sdf"
     poses = []
@@ -219,6 +254,36 @@ def test_rigid_refine_commands_disable_cnn_then_minimize_and_rescore(tmp_path) -
     assert refine_command[refine_command.index("--cnn_scoring") + 1] == "rescore"
     assert "--autobox_ligand" not in refine_command
     assert "--center_x" in refine_command
+
+
+@pytest.mark.parametrize(
+    ("minimize", "message"),
+    [(False, "gnina exceeded"), (True, "gnina --minimize exceeded")],
+)
+def test_gnina_timeout_reports_the_failed_stage(tmp_path, minimize, message) -> None:
+    target = _targets(tmp_path)[0]
+    config = BoxScoringConfig(
+        targets=(target,),
+        output_dir=tmp_path / "out",
+        gnina_timeout_seconds=2,
+    )
+    ligand = tmp_path / "ligand.sdf"
+    output = tmp_path / "output.sdf"
+
+    with (
+        patch("mtrl.scoring.gnina.require"),
+        patch("mtrl.scoring.busters.require"),
+        patch(
+            "mtrl.scoring.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(["gnina"], 2),
+        ),
+    ):
+        pipeline = BoxDockingPipeline(config)
+        with pytest.raises(RuntimeError, match=message):
+            if minimize:
+                pipeline._run_gnina_minimize(target, ligand, output)
+            else:
+                pipeline._run_gnina(target, ligand, output)
 
 
 def test_rigid_poses_are_refined_in_one_batch_and_annotated(tmp_path) -> None:
@@ -445,6 +510,9 @@ def test_box_objectives_apply_lilly_then_emit_one_score_per_target(tmp_path) -> 
     assert (tmp_path / "out" / "best" / "overall" / "q_open.sdf").is_file()
     record = json.loads((tmp_path / "out" / "scores.jsonl").read_text().splitlines()[1])
     assert record["targets"]["q_open"]["n_passing_poses"] == 3
+    summary = (tmp_path / "out" / "summary.txt").read_text()
+    assert "Target acceptance policy: any" in summary
+    assert "Accepted by target policy: 1" in summary
 
 
 def test_box_rewards_use_all_target_affinities_as_pareto_axes(tmp_path) -> None:
@@ -643,3 +711,7 @@ def test_pose_names_are_stable_across_target_files_with_partial_hits(tmp_path) -
         "generation_000001_molecule_0001",
         "generation_000001_molecule_0002",
     ]
+    score_records = [
+        json.loads(line) for line in (tmp_path / "out" / "scores.jsonl").read_text().splitlines()
+    ]
+    assert [record["name"] for record in score_records] == c_names

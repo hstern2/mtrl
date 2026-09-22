@@ -40,14 +40,15 @@ For each generated AMSR string, `mtrl`:
 Accepted molecules maximize GNINA `CNNaffinity` and Roshambo2
 `tanimoto_combination`. Their base reward is fixed between generations:
 reference-normalized affinity multiplied by Tanimoto similarity. A molecule
-that extends the cumulative Pareto front receives a small bonus. QED and the
-former generic drug-likeness filter are not used. The model-emitted conformer
-is scored; mtrl does not generate replacement conformers.
+that extends the cumulative Pareto front receives a small bonus. In this
+reference-ligand mode, QED and the former generic drug-likeness filter are not
+used. The model-emitted conformer is scored; mtrl does not generate replacement
+conformers.
 
 ### Install
 
-GNINA and LillyMol (when its optional filter is enabled) must be available in
-`PATH`.
+GNINA must be available in `PATH`. Rigid docking additionally requires Open
+Babel's `obabel`; the optional medchem filter requires LillyMol.
 
 ```bash
 uv sync
@@ -85,7 +86,7 @@ by generation. Every generated string, score, RMSD, and rejection reason is in
 are removed after each molecule. External-tool chatter is hidden unless
 `--verbose-tools` is set.
 
-## Explicit-box, multi-receptor RL
+## Explicit-box, multi-receptor docking and RL
 
 Full GNINA docking without a reference ligand is configured with a JSON target
 manifest. Each entry is one inseparable receptor/box specification and becomes
@@ -106,7 +107,8 @@ one independently maximized `CNNaffinity` objective:
 }
 ```
 
-Receptor paths may be absolute or relative to the manifest. Run with:
+Centers and box sizes are in angstroms. Receptor paths may be absolute or
+relative to the manifest. Run with:
 
 ```bash
 uv run mtrl validate-targets targets.json
@@ -142,10 +144,10 @@ a full search in every configured box. Every returned pose is checked with the
 receptor-aware PoseBusters docking configuration, and each objective uses the
 highest `CNNaffinity` among that target's passing poses. A molecule is retained
 when at least one target has a passing pose. Targets without a passing pose get
-a dominated objective value of `0.0`; no pose is fabricated for them. Selected
-valid poses are written as one SDF per target under each generation and
-cumulative-front directory. The reference-aligned minimization workflow above
-remains available unchanged.
+the configurable failure score (`0.0` by default); no pose is fabricated for
+them. Selected valid poses are written as one SDF per target under each
+generation and cumulative-front directory. The reference-aligned minimization
+workflow above remains available unchanged.
 
 `mtrl score` applies the same target loading, LillyMol filtering, full docking,
 PoseBusters checks, target acceptance policy, and failed-target score without

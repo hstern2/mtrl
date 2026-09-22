@@ -6,7 +6,7 @@ import os
 from collections.abc import Callable
 from csv import DictWriter
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, TypeVar
 
 import numpy as np
 import torch
@@ -24,6 +24,107 @@ from mtrl.scoring import (
     StructureScore,
     StructureScoringPipeline,
 )
+
+
+class _ScoringResult(Protocol):
+    @property
+    def rejection_reason(self) -> str: ...
+
+
+ScoreT = TypeVar("ScoreT", bound=_ScoringResult)
+
+
+class _BatchScoringPipeline(Protocol[ScoreT]):
+    def evaluate_decoded_batch(
+        self, candidates: list[DecodedAMSR]
+    ) -> list[tuple[Mol | None, ScoreT]]: ...
+
+    def score_batch(self, mols: list[Mol]) -> list[ScoreT]: ...
+
+
+def _screen_candidates(
+    token_sequences: list[list[str]],
+    decode_fn: Callable[[list[str]], DecodedAMSR | None],
+    lilly_filter: LillyMedchemFilter | None,
+) -> tuple[list[DecodedAMSR | None], list[ScoredItem], list[int], list[DecodedAMSR]]:
+    """Decode candidates and apply inexpensive molecule-level gates."""
+    decoded = [decode_fn(sequence) for sequence in token_sequences]
+    items = [ScoredItem(token_ids=[]) for _ in decoded]
+    candidate_indices = []
+    candidates = []
+    for index, candidate in enumerate(decoded):
+        if candidate is None:
+            items[index].valid = False
+            items[index].rejection_reason = "AMSR decode failed"
+        elif len(Chem.GetMolFrags(candidate.mol)) != 1:
+            items[index].valid = False
+            items[index].rejection_reason = "molecule is disconnected"
+        else:
+            candidate_indices.append(index)
+            candidates.append(candidate)
+
+    if lilly_filter is None or not candidates:
+        return decoded, items, candidate_indices, candidates
+
+    retained_indices = []
+    retained_candidates = []
+    passed = lilly_filter.accept_batch([candidate.mol for candidate in candidates])
+    for index, candidate, accepted in zip(candidate_indices, candidates, passed, strict=True):
+        if accepted:
+            retained_indices.append(index)
+            retained_candidates.append(candidate)
+        else:
+            items[index].valid = False
+            items[index].rejection_reason = "Lilly Medchem Rules (-relaxed) failed"
+    return decoded, items, retained_indices, retained_candidates
+
+
+def _evaluate_candidates(
+    candidate_indices: list[int],
+    candidates: list[DecodedAMSR],
+    items: list[ScoredItem],
+    conformer_fn: Callable[[DecodedAMSR], Mol | None],
+    pipeline: _BatchScoringPipeline[ScoreT],
+    *,
+    pipeline_builds_conformers: bool,
+) -> tuple[list[int], list[Mol], list[ScoreT]]:
+    """Construct and score conformers while preserving candidate order."""
+    if not candidates:
+        return [], [], []
+    scored_indices = []
+    conformers = []
+    results = []
+    if pipeline_builds_conformers:
+        evaluated = pipeline.evaluate_decoded_batch(candidates)
+        for index, (conformer, result) in zip(candidate_indices, evaluated, strict=True):
+            if conformer is None:
+                items[index].valid = False
+                items[index].rejection_reason = (
+                    result.rejection_reason or "AMSR conformer construction failed"
+                )
+            else:
+                scored_indices.append(index)
+                conformers.append(conformer)
+                results.append(result)
+        return scored_indices, conformers, results
+
+    for index, candidate in zip(candidate_indices, candidates, strict=True):
+        conformer = conformer_fn(candidate)
+        if conformer is None:
+            items[index].valid = False
+            items[index].rejection_reason = "AMSR conformer construction failed"
+        else:
+            scored_indices.append(index)
+            conformers.append(conformer)
+    results = pipeline.score_batch(conformers) if conformers else []
+    return scored_indices, conformers, results
+
+
+def _append_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as output:
+        for record in records:
+            output.write(json.dumps(record, sort_keys=True) + "\n")
 
 
 class CNNaffinityObjective(Objective):
@@ -117,76 +218,27 @@ class DockingObjectives(Objectives):
             self.lilly_filter = LillyMedchemFilter(config.lilly_rules_executable)
 
     def evaluate(self, token_sequences: list[list[str]]) -> list[ScoredItem]:
-        decoded = [self.decode_fn(sequence) for sequence in token_sequences]
-        items = [ScoredItem(token_ids=[]) for _ in decoded]
+        decoded, items, candidate_indices, candidates = _screen_candidates(
+            token_sequences, self.decode_fn, self.lilly_filter
+        )
         diagnostics: list[StructureScore | None] = [None] * len(decoded)
-
-        candidate_indices = []
-        candidate_decoded = []
-        for index, candidate in enumerate(decoded):
-            if candidate is None:
-                items[index].valid = False
-                items[index].rejection_reason = "AMSR decode failed"
-                continue
-            if len(Chem.GetMolFrags(candidate.mol)) != 1:
-                items[index].valid = False
-                items[index].rejection_reason = "molecule is disconnected"
-                continue
-            candidate_indices.append(index)
-            candidate_decoded.append(candidate)
-
-        if self.lilly_filter is not None and candidate_decoded:
-            accepted = self.lilly_filter.accept_batch(
-                [candidate.mol for candidate in candidate_decoded]
-            )
-            retained_indices = []
-            retained_decoded = []
-            for index, candidate, passed in zip(
-                candidate_indices, candidate_decoded, accepted, strict=True
-            ):
-                if passed:
-                    retained_indices.append(index)
-                    retained_decoded.append(candidate)
-                else:
-                    items[index].valid = False
-                    items[index].rejection_reason = "Lilly Medchem Rules (-relaxed) failed"
-            candidate_indices = retained_indices
-            candidate_decoded = retained_decoded
-
-        conformer_indices = []
-        candidate_mols = []
-        results = []
-        if self._pipeline_owns_conformer_construction and candidate_decoded:
-            evaluated = self.pipeline.evaluate_decoded_batch(candidate_decoded)
-            for index, (conformer, result) in zip(candidate_indices, evaluated, strict=True):
-                if conformer is None:
-                    items[index].valid = False
-                    items[index].rejection_reason = result.rejection_reason
-                    continue
-                conformer_indices.append(index)
-                candidate_mols.append(conformer)
-                results.append(result)
-        else:
-            for index, candidate in zip(candidate_indices, candidate_decoded, strict=True):
-                conformer = self.conformer_fn(candidate)
-                if conformer is None:
-                    items[index].valid = False
-                    items[index].rejection_reason = "AMSR conformer construction failed"
-                    continue
-                conformer_indices.append(index)
-                candidate_mols.append(conformer)
-            results = self.pipeline.score_batch(candidate_mols) if candidate_mols else []
+        conformer_indices, conformers, results = _evaluate_candidates(
+            candidate_indices,
+            candidates,
+            items,
+            self.conformer_fn,
+            self.pipeline,
+            pipeline_builds_conformers=self._pipeline_owns_conformer_construction,
+        )
         output_mols: list[Mol | None] = [None] * len(decoded)
-        for index, result, candidate_mol in zip(
-            conformer_indices, results, candidate_mols, strict=True
-        ):
+        for index, result, conformer in zip(conformer_indices, results, conformers, strict=True):
             diagnostics[index] = result
             if not result.accepted:
                 items[index].valid = False
                 items[index].rejection_reason = result.rejection_reason
                 continue
             output_mols[index] = (
-                result.minimized_mol if result.minimized_mol is not None else candidate_mol
+                result.minimized_mol if result.minimized_mol is not None else conformer
             )
             for objective in self.objectives:
                 score = objective.score_batch([result])[0]
@@ -209,7 +261,7 @@ class DockingObjectives(Objectives):
         self._overall_front = self._pareto_front([*self._overall_front, *accepted_records])
         if self.rank == 0:
             if score_records:
-                self._append_scores(score_records)
+                _append_jsonl(self.score_log, score_records)
             self._write_pareto_fronts(accepted_records)
             self._write_progress(score_records, accepted_records)
         self.generation += 1
@@ -367,12 +419,6 @@ class DockingObjectives(Objectives):
         gathered: list[dict[str, Any] | None] = [None] * torch.distributed.get_world_size()
         torch.distributed.all_gather_object(gathered, payload)
         return [part for part in gathered if part is not None]
-
-    def _append_scores(self, records: list[dict[str, Any]]) -> None:
-        self.config.output_dir.mkdir(parents=True, exist_ok=True)
-        with self.score_log.open("a") as output:
-            for record in records:
-                output.write(json.dumps(record, sort_keys=True) + "\n")
 
     @staticmethod
     def _pareto_front(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -604,64 +650,18 @@ class BoxDockingObjectives(Objectives):
             self.lilly_filter = LillyMedchemFilter(config.lilly_rules_executable)
 
     def evaluate(self, token_sequences: list[list[str]]) -> list[ScoredItem]:
-        decoded = [self.decode_fn(sequence) for sequence in token_sequences]
-        items = [ScoredItem(token_ids=[]) for _ in decoded]
+        decoded, items, candidate_indices, candidates = _screen_candidates(
+            token_sequences, self.decode_fn, self.lilly_filter
+        )
         diagnostics: list[BoxDockingScore | None] = [None] * len(decoded)
-
-        candidate_indices = []
-        candidate_decoded = []
-        for index, candidate in enumerate(decoded):
-            if candidate is None:
-                items[index].valid = False
-                items[index].rejection_reason = "AMSR decode failed"
-                continue
-            if len(Chem.GetMolFrags(candidate.mol)) != 1:
-                items[index].valid = False
-                items[index].rejection_reason = "molecule is disconnected"
-                continue
-            candidate_indices.append(index)
-            candidate_decoded.append(candidate)
-
-        if self.lilly_filter is not None and candidate_decoded:
-            accepted = self.lilly_filter.accept_batch(
-                [candidate.mol for candidate in candidate_decoded]
-            )
-            retained_indices = []
-            retained_decoded = []
-            for index, candidate, passed in zip(
-                candidate_indices, candidate_decoded, accepted, strict=True
-            ):
-                if passed:
-                    retained_indices.append(index)
-                    retained_decoded.append(candidate)
-                else:
-                    items[index].valid = False
-                    items[index].rejection_reason = "Lilly Medchem Rules (-relaxed) failed"
-            candidate_indices = retained_indices
-            candidate_decoded = retained_decoded
-
-        conformer_indices = []
-        results: list[BoxDockingScore] = []
-        if self._pipeline_owns_conformer_construction and candidate_decoded:
-            evaluated = self.pipeline.evaluate_decoded_batch(candidate_decoded)
-            for index, (conformer, result) in zip(candidate_indices, evaluated, strict=True):
-                if conformer is None:
-                    items[index].valid = False
-                    items[index].rejection_reason = result.rejection_reason
-                    continue
-                conformer_indices.append(index)
-                results.append(result)
-        else:
-            candidate_mols = []
-            for index, candidate in zip(candidate_indices, candidate_decoded, strict=True):
-                conformer = self.conformer_fn(candidate)
-                if conformer is None:
-                    items[index].valid = False
-                    items[index].rejection_reason = "AMSR conformer construction failed"
-                    continue
-                conformer_indices.append(index)
-                candidate_mols.append(conformer)
-            results = self.pipeline.score_batch(candidate_mols) if candidate_mols else []
+        conformer_indices, _, results = _evaluate_candidates(
+            candidate_indices,
+            candidates,
+            items,
+            self.conformer_fn,
+            self.pipeline,
+            pipeline_builds_conformers=self._pipeline_owns_conformer_construction,
+        )
 
         for index, result in zip(conformer_indices, results, strict=True):
             diagnostics[index] = result
@@ -682,12 +682,18 @@ class BoxDockingObjectives(Objectives):
         gathered = DockingObjectives._gather_output(payload)
         score_records = [record for part in gathered for record in part["scores"]]
         accepted_records = [record for part in gathered for record in part["accepted"]]
+        accepted_names = {}
         for molecule_number, record in enumerate(accepted_records, start=1):
             record["name"] = f"generation_{record['generation']:06d}_molecule_{molecule_number:04d}"
+            accepted_names[(record["generation"], record["rank"], record["index"])] = record["name"]
+        for record in score_records:
+            name = accepted_names.get((record["generation"], record["rank"], record["index"]))
+            if name is not None:
+                record["name"] = name
         self._overall_front = self._pareto_front([*self._overall_front, *accepted_records])
         if self.rank == 0:
             if score_records:
-                self._append_scores(score_records)
+                _append_jsonl(self.score_log, score_records)
             self._write_outputs(accepted_records)
             self._write_progress(score_records, accepted_records)
         self.generation += 1
@@ -782,12 +788,6 @@ class BoxDockingObjectives(Objectives):
                 record["amsr"],
             ),
         )
-
-    def _append_scores(self, records: list[dict[str, Any]]) -> None:
-        self.config.output_dir.mkdir(parents=True, exist_ok=True)
-        with self.score_log.open("a") as output:
-            for record in records:
-                output.write(json.dumps(record, sort_keys=True) + "\n")
 
     def _write_outputs(self, accepted: list[dict[str, Any]]) -> None:
         if accepted:
@@ -892,7 +892,8 @@ class BoxDockingObjectives(Objectives):
             "",
             f"Generations: {len(self._progress):,}",
             f"Strings generated: {int(latest['cumulative_generated']):,}",
-            f"Passed at least one target gate: {int(latest['cumulative_accepted']):,}",
+            f"Target acceptance policy: {self.config.accept_targets}",
+            f"Accepted by target policy: {int(latest['cumulative_accepted']):,}",
             f"Passed every target gate (latest generation): "
             f"{int(latest['all_targets_accepted']):,}",
             f"Cumulative Pareto-front size: {len(self._overall_front):,}",

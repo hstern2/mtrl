@@ -384,14 +384,6 @@ class BoxDockingScore:
     accepted: bool = False
     rejection_reason: str = ""
 
-    @property
-    def cnn_affinities(self) -> dict[str, float]:
-        return {
-            name: float(result.cnn_affinity)
-            for name, result in self.targets.items()
-            if result.cnn_affinity is not None
-        }
-
 
 def _float_property(properties: dict, *names: str) -> float | None:
     for name in names:
@@ -577,26 +569,13 @@ class BoxDockingPipeline:
         *,
         cnn_scoring: str = "rescore",
     ) -> None:
-        cx, cy, cz = target.center
-        sx, sy, sz = target.size
         command = [
             "gnina",
             "--receptor",
             str(target.receptor_pdb),
             "--ligand",
             str(ligand_path),
-            "--center_x",
-            str(cx),
-            "--center_y",
-            str(cy),
-            "--center_z",
-            str(cz),
-            "--size_x",
-            str(sx),
-            "--size_y",
-            str(sy),
-            "--size_z",
-            str(sz),
+            *self._box_arguments(target),
             "--exhaustiveness",
             str(target.exhaustiveness),
             "--num_modes",
@@ -608,34 +587,11 @@ class BoxDockingPipeline:
             "--out",
             str(output_sdf),
         ]
-        try:
-            result = subprocess.run(
-                command,
-                env=_gnina_environment(self.local_rank),
-                check=False,
-                text=True,
-                capture_output=not self.config.verbose_tools,
-                timeout=self.config.gnina_timeout_seconds,
-            )
-        except subprocess.TimeoutExpired as error:
-            output_sdf.unlink(missing_ok=True)
-            raise RuntimeError(
-                f"gnina exceeded its {self.config.gnina_timeout_seconds}-second timeout"
-            ) from error
-        if result.returncode != 0:
-            output_sdf.unlink(missing_ok=True)
-            diagnostic = ""
-            if not self.config.verbose_tools:
-                diagnostic = f": {(result.stderr or result.stdout).strip()[-500:]}"
-            raise RuntimeError(f"gnina failed with exit code {result.returncode}{diagnostic}")
-        if not output_sdf.is_file():
-            raise RuntimeError("gnina did not write its expected SDF output")
+        self._execute_gnina(command, output_sdf, action="gnina")
 
     def _run_gnina_minimize(
         self, target: DockingTarget, ligand_sdf: Path, output_sdf: Path
     ) -> None:
-        cx, cy, cz = target.center
-        sx, sy, sz = target.size
         command = [
             "gnina",
             "--minimize",
@@ -643,23 +599,32 @@ class BoxDockingPipeline:
             str(target.receptor_pdb),
             "--ligand",
             str(ligand_sdf),
-            "--center_x",
-            str(cx),
-            "--center_y",
-            str(cy),
-            "--center_z",
-            str(cz),
-            "--size_x",
-            str(sx),
-            "--size_y",
-            str(sy),
-            "--size_z",
-            str(sz),
+            *self._box_arguments(target),
             "--cnn_scoring",
             "rescore",
             "--out",
             str(output_sdf),
         ]
+        self._execute_gnina(command, output_sdf, action="gnina --minimize")
+
+    @staticmethod
+    def _box_arguments(target: DockingTarget) -> list[str]:
+        return [
+            "--center_x",
+            str(target.center[0]),
+            "--center_y",
+            str(target.center[1]),
+            "--center_z",
+            str(target.center[2]),
+            "--size_x",
+            str(target.size[0]),
+            "--size_y",
+            str(target.size[1]),
+            "--size_z",
+            str(target.size[2]),
+        ]
+
+    def _execute_gnina(self, command: list[str], output_sdf: Path, *, action: str) -> None:
         try:
             result = subprocess.run(
                 command,
@@ -672,18 +637,16 @@ class BoxDockingPipeline:
         except subprocess.TimeoutExpired as error:
             output_sdf.unlink(missing_ok=True)
             raise RuntimeError(
-                f"gnina --minimize exceeded its {self.config.gnina_timeout_seconds}-second timeout"
+                f"{action} exceeded its {self.config.gnina_timeout_seconds}-second timeout"
             ) from error
         if result.returncode != 0:
             output_sdf.unlink(missing_ok=True)
             diagnostic = ""
             if not self.config.verbose_tools:
                 diagnostic = f": {(result.stderr or result.stdout).strip()[-500:]}"
-            raise RuntimeError(
-                f"gnina --minimize failed with exit code {result.returncode}{diagnostic}"
-            )
+            raise RuntimeError(f"{action} failed with exit code {result.returncode}{diagnostic}")
         if not output_sdf.is_file():
-            raise RuntimeError("gnina --minimize did not write its expected SDF output")
+            raise RuntimeError(f"{action} did not write its expected SDF output")
 
     def _run_posebusters(self, receptor_pdb: Path, poses_sdf: Path) -> None:
         try:
