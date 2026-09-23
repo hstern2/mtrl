@@ -113,6 +113,16 @@ def score(
         "--evaluation-workers",
         help="Worker processes used concurrently for GNINA and PoseBusters",
     ),
+    rdkit_druglike_filter: bool = typer.Option(
+        False,
+        "--rdkit-druglike-filter/--no-rdkit-druglike-filter",
+        help="Apply RDKit Rule-of-Five and Veber property limits before docking",
+    ),
+    max_br_sascore: float | None = typer.Option(
+        None,
+        "--max-br-sascore",
+        help="Reject molecules above this BR-SAScore (1 is easiest; 10 is hardest)",
+    ),
     lilly_medchem_rules: bool = typer.Option(
         False,
         "--lilly-medchem-rules/--no-lilly-medchem-rules",
@@ -152,11 +162,17 @@ def score(
         raise typer.BadParameter("--docking-mode must be 'flexible', 'rigid', or 'rigid-refine'")
     if not math.isfinite(target_failure_score):
         raise typer.BadParameter("--target-failure-score must be finite")
+    if max_br_sascore is not None and (
+        not math.isfinite(max_br_sascore) or not 1.0 <= max_br_sascore <= 10.0
+    ):
+        raise typer.BadParameter("--max-br-sascore must be between 1 and 10")
     try:
         targets = load_docking_targets(docking_targets.resolve())
         config = BoxScoringConfig(
             targets=targets,
             output_dir=output_dir.resolve(),
+            rdkit_druglike_filter=rdkit_druglike_filter,
+            max_br_sascore=max_br_sascore,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
             verbose_tools=verbose_tools,
@@ -392,6 +408,24 @@ def rl(
         ),
         rich_help_panel="Parallel evaluation",
     ),
+    rdkit_druglike_filter: bool = typer.Option(
+        False,
+        "--rdkit-druglike-filter/--no-rdkit-druglike-filter",
+        help=(
+            "Apply RDKit Rule-of-Five and Veber property limits before costly 3D "
+            "scoring; failures receive no reward"
+        ),
+        rich_help_panel="Molecule gates",
+    ),
+    max_br_sascore: float | None = typer.Option(
+        None,
+        "--max-br-sascore",
+        help=(
+            "Reject molecules above this BR-SAScore before costly 3D scoring; "
+            "1 is easiest and 10 is hardest"
+        ),
+        rich_help_panel="Molecule gates",
+    ),
     lilly_medchem_rules: bool = typer.Option(
         False,
         "--lilly-medchem-rules/--no-lilly-medchem-rules",
@@ -593,6 +627,10 @@ def rl(
         raise typer.BadParameter("--posebusters-config must be 'dock' or 'dock-fast'")
     if not math.isfinite(target_failure_score):
         raise typer.BadParameter("--target-failure-score must be finite")
+    if max_br_sascore is not None and (
+        not math.isfinite(max_br_sascore) or not 1.0 <= max_br_sascore <= 10.0
+    ):
+        raise typer.BadParameter("--max-br-sascore must be between 1 and 10")
     if docking_targets is not None and (receptor_pdb is not None or reference_sdf is not None):
         raise typer.BadParameter(
             "--docking-targets cannot be combined with --receptor-pdb or --reference-sdf"
@@ -636,6 +674,8 @@ def rl(
         config: ScoringConfig | BoxScoringConfig = BoxScoringConfig(
             targets=targets,
             output_dir=output_dir,
+            rdkit_druglike_filter=rdkit_druglike_filter,
+            max_br_sascore=max_br_sascore,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
             verbose_tools=verbose_tools,
@@ -655,6 +695,8 @@ def rl(
             receptor_pdb=receptor_pdb.resolve(),
             reference_sdf=reference_sdf.resolve(),
             output_dir=output_dir,
+            rdkit_druglike_filter=rdkit_druglike_filter,
+            max_br_sascore=max_br_sascore,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
             verbose_tools=verbose_tools,
@@ -690,6 +732,8 @@ def rl(
                         posebusters_config if docking_targets is not None else None
                     ),
                     "qed_objective": qed_objective if docking_targets is not None else None,
+                    "rdkit_druglike_filter": rdkit_druglike_filter,
+                    "max_br_sascore": max_br_sascore,
                     "iterations": iterations,
                     "kl_beta": kl_beta,
                     "kl_reference_checkpoint": str(kl_reference_checkpoint.resolve())

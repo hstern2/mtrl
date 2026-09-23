@@ -110,11 +110,18 @@ def _positive_int(value: object, *, target_name: str, field: str) -> int:
     return value
 
 
+def _validate_max_br_sascore(value: float | None) -> None:
+    if value is not None and (not math.isfinite(value) or not 1.0 <= value <= 10.0):
+        raise ValueError("max_br_sascore must be between 1 and 10")
+
+
 @dataclass(frozen=True)
 class ScoringConfig:
     receptor_pdb: Path
     reference_sdf: Path
     output_dir: Path
+    rdkit_druglike_filter: bool = False
+    max_br_sascore: float | None = None
     lilly_medchem_rules: bool = False
     lilly_rules_executable: str = "Lilly_Medchem_Rules.rb"
     verbose_tools: bool = False
@@ -127,6 +134,7 @@ class ScoringConfig:
             raise ValueError(f"reference SDF does not exist: {self.reference_sdf}")
         if self.evaluation_workers <= 0:
             raise ValueError("evaluation_workers must be > 0")
+        _validate_max_br_sascore(self.max_br_sascore)
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -164,6 +172,8 @@ class BoxScoringConfig:
 
     targets: tuple[DockingTarget, ...]
     output_dir: Path
+    rdkit_druglike_filter: bool = False
+    max_br_sascore: float | None = None
     lilly_medchem_rules: bool = False
     lilly_rules_executable: str = "Lilly_Medchem_Rules.rb"
     verbose_tools: bool = False
@@ -186,6 +196,7 @@ class BoxScoringConfig:
             target.validate()
         if self.evaluation_workers <= 0:
             raise ValueError("evaluation_workers must be > 0")
+        _validate_max_br_sascore(self.max_br_sascore)
         if not math.isfinite(self.target_failure_score):
             raise ValueError("target_failure_score must be finite")
         if self.accept_targets not in {"any", "all"}:
@@ -204,6 +215,8 @@ class BoxScoringConfig:
             "mode": "box_docking",
             "targets": [target.to_dict() for target in self.targets],
             "output_dir": str(self.output_dir),
+            "rdkit_druglike_filter": self.rdkit_druglike_filter,
+            "max_br_sascore": self.max_br_sascore,
             "lilly_medchem_rules": self.lilly_medchem_rules,
             "lilly_rules_executable": self.lilly_rules_executable,
             "verbose_tools": self.verbose_tools,

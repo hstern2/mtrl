@@ -29,8 +29,8 @@ the only requirements for inclusion.
 For each generated AMSR string, `mtrl`:
 
 1. decodes the stringent topology and encoded dihedrals;
-2. rejects disconnected molecules and, optionally, failures of Lilly Medchem
-   Rules with `-relaxed`;
+2. rejects disconnected molecules and, optionally, failures of the RDKit
+   drug-likeness, BR-SAScore, and Lilly Medchem Rules gates;
 3. constructs the AMSR 3D conformer and aligns it to a reference ligand with
    Roshambo2;
 4. minimizes the aligned pose with GNINA and records how far minimization moves
@@ -40,10 +40,9 @@ For each generated AMSR string, `mtrl`:
 Accepted molecules maximize GNINA `CNNaffinity` and Roshambo2
 `tanimoto_combination`. Their base reward is fixed between generations:
 reference-normalized affinity multiplied by Tanimoto similarity. A molecule
-that extends the cumulative Pareto front receives a small bonus. In this
-reference-ligand mode, QED and the former generic drug-likeness filter are not
-used. The model-emitted conformer is scored; mtrl does not generate replacement
-conformers.
+that extends the cumulative Pareto front receives a small bonus. These gates do
+not become reward objectives. The model-emitted conformer is scored; mtrl does
+not generate replacement conformers.
 
 ### Install
 
@@ -62,6 +61,8 @@ Start from the final pretrained `best.pt` checkpoint:
 CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
   --receptor-pdb receptor.pdb \
   --reference-sdf reference_ligand.sdf \
+  --rdkit-druglike-filter \
+  --max-br-sascore 5 \
   --lilly-medchem-rules \
   --output-dir run_rl
 ```
@@ -119,7 +120,8 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl score molecules.sdf \
   --gnina-timeout-seconds 600 \
   --posebusters-timeout-seconds 600 \
   --posebusters-config dock-fast \
-  --qed-objective \
+  --rdkit-druglike-filter \
+  --max-br-sascore 5 \
   --target-failure-score 0 \
   --accept-targets any \
   --lilly-medchem-rules \
@@ -131,7 +133,8 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
   --gnina-timeout-seconds 600 \
   --posebusters-timeout-seconds 600 \
   --posebusters-config dock-fast \
-  --qed-objective \
+  --rdkit-druglike-filter \
+  --max-br-sascore 5 \
   --target-failure-score 0 \
   --accept-targets any \
   --lilly-medchem-rules \
@@ -139,17 +142,22 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
   --output-dir run_box_rl
 ```
 
-Lilly Medchem Rules remains a molecule-level gate before 3D work. GNINA performs
-a full search in every configured box. Every returned pose is checked with the
-receptor-aware PoseBusters docking configuration, and each objective uses the
-highest `CNNaffinity` among that target's passing poses. A molecule is retained
-when at least one target has a passing pose. Targets without a passing pose get
-the configurable failure score (`0.0` by default); no pose is fabricated for
-them. Selected valid poses are written as one SDF per target under each
-generation and cumulative-front directory. The reference-aligned minimization
-workflow above remains available unchanged.
+All enabled molecule filters run before conformer construction and docking.
+`--rdkit-druglike-filter` enforces molecular weight ≤ 500, cLogP ≤ 5, H-bond
+donors ≤ 5, H-bond acceptors ≤ 10, rotatable bonds ≤ 10, and TPSA ≤ 140.
+`--max-br-sascore 5` applies the published USPTO/eMolecules BR-SAScore, on which
+1 is easiest and 10 is hardest. Lilly Medchem Rules remains an independent
+structural-alert gate. GNINA performs a full search in every configured box.
+Every returned pose is checked with the receptor-aware PoseBusters docking
+configuration, and each objective uses the highest `CNNaffinity` among that
+target's passing poses. A molecule is retained when at least one target has a
+passing pose. Targets without a passing pose get the configurable failure score
+(`0.0` by default); no pose is fabricated for them. Selected valid poses are
+written as one SDF per target under each generation and cumulative-front
+directory. The reference-aligned minimization workflow above remains available
+unchanged.
 
-`mtrl score` applies the same target loading, LillyMol filtering, full docking,
+`mtrl score` applies the same target loading, molecule filters, full docking,
 PoseBusters checks, target acceptance policy, and failed-target score without
 sampling or training a model. Its input SDF must contain 3D coordinates. It
 writes `scores.jsonl`, `summary.json`, `scoring_config.json`, and one selected-pose

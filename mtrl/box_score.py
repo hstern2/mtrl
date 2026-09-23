@@ -8,8 +8,10 @@ from rdkit import Chem
 from rdkit.Chem import QED, Mol
 
 from mtrl.config import BoxScoringConfig
+from mtrl.druglike import druglike_rejection_reason
 from mtrl.lilly import LillyMedchemFilter
 from mtrl.scoring import BoxDockingPipeline, BoxDockingScore
+from mtrl.synthetic_accessibility import br_sascore_rejection_reason
 
 
 def _objective_scores(
@@ -98,6 +100,12 @@ def score_sdf(
         record["smiles"] = Chem.MolToSmiles(mol, isomericSmiles=True)
         if len(Chem.GetMolFrags(mol)) != 1:
             record["rejection_reason"] = "molecule is disconnected"
+        elif config.rdkit_druglike_filter and (reason := druglike_rejection_reason(mol)):
+            record["rejection_reason"] = reason
+        elif config.max_br_sascore is not None and (
+            reason := br_sascore_rejection_reason(mol, config.max_br_sascore)
+        ):
+            record["rejection_reason"] = reason
         elif mol.GetNumConformers() == 0 or not mol.GetConformer().Is3D():
             record["rejection_reason"] = "input molecule is missing 3D coordinates"
         else:

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "AMSR molecular generation and reinforcement learning"
 authors = [{ name = "Harry Stern" }]
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -36,6 +36,9 @@ mtrl = "mtrl.cli:app"
 
 [tool.setuptools]
 packages = { find = { include = ["mtrl", "mtrl.*"] } }
+
+[tool.setuptools.package-data]
+mtrl = ["data/*.pkl.gz"]
 
 [tool.uv]
 required-environments = [

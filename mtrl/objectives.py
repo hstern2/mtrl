@@ -17,6 +17,7 @@ from trl.objectives.pareto import nsga2_sort
 
 from mtrl import DecodedAMSR, decode_amsr, make_conformer
 from mtrl.config import BoxScoringConfig, ScoringConfig, scoring_mode_from_env
+from mtrl.druglike import druglike_rejection_reason
 from mtrl.lilly import LillyMedchemFilter
 from mtrl.scoring import (
     BoxDockingPipeline,
@@ -24,6 +25,7 @@ from mtrl.scoring import (
     StructureScore,
     StructureScoringPipeline,
 )
+from mtrl.synthetic_accessibility import br_sascore_rejection_reason
 
 
 class _ScoringResult(Protocol):
@@ -45,6 +47,8 @@ class _BatchScoringPipeline(Protocol[ScoreT]):
 def _screen_candidates(
     token_sequences: list[list[str]],
     decode_fn: Callable[[list[str]], DecodedAMSR | None],
+    rdkit_druglike_filter: bool,
+    max_br_sascore: float | None,
     lilly_filter: LillyMedchemFilter | None,
 ) -> tuple[list[DecodedAMSR | None], list[ScoredItem], list[int], list[DecodedAMSR]]:
     """Decode candidates and apply inexpensive molecule-level gates."""
@@ -59,6 +63,14 @@ def _screen_candidates(
         elif len(Chem.GetMolFrags(candidate.mol)) != 1:
             items[index].valid = False
             items[index].rejection_reason = "molecule is disconnected"
+        elif rdkit_druglike_filter and (reason := druglike_rejection_reason(candidate.mol)):
+            items[index].valid = False
+            items[index].rejection_reason = reason
+        elif max_br_sascore is not None and (
+            reason := br_sascore_rejection_reason(candidate.mol, max_br_sascore)
+        ):
+            items[index].valid = False
+            items[index].rejection_reason = reason
         else:
             candidate_indices.append(index)
             candidates.append(candidate)
@@ -219,7 +231,11 @@ class DockingObjectives(Objectives):
 
     def evaluate(self, token_sequences: list[list[str]]) -> list[ScoredItem]:
         decoded, items, candidate_indices, candidates = _screen_candidates(
-            token_sequences, self.decode_fn, self.lilly_filter
+            token_sequences,
+            self.decode_fn,
+            self.config.rdkit_druglike_filter,
+            self.config.max_br_sascore,
+            self.lilly_filter,
         )
         diagnostics: list[StructureScore | None] = [None] * len(decoded)
         conformer_indices, conformers, results = _evaluate_candidates(
@@ -532,6 +548,10 @@ class DockingObjectives(Objectives):
             "cumulative_accepted": prior_accepted + len(accepted),
             "decode_failed": reasons.count("AMSR decode failed"),
             "disconnected_failed": reasons.count("molecule is disconnected"),
+            "rdkit_druglike_failed": sum(
+                reason.startswith("RDKit drug-likeness") for reason in reasons
+            ),
+            "br_sascore_failed": sum(reason.startswith("BR-SAScore") for reason in reasons),
             "lilly_failed": sum(reason.startswith("Lilly Medchem Rules") for reason in reasons),
             "conformer_failed": reasons.count("AMSR conformer construction failed"),
             "posebusters_failed": reasons.count("PoseBusters failed"),
@@ -539,6 +559,8 @@ class DockingObjectives(Objectives):
                 not (
                     reason == "AMSR decode failed"
                     or reason == "molecule is disconnected"
+                    or reason.startswith("RDKit drug-likeness")
+                    or reason.startswith("BR-SAScore")
                     or reason.startswith("Lilly Medchem Rules")
                     or reason == "AMSR conformer construction failed"
                     or reason == "PoseBusters failed"
@@ -651,7 +673,11 @@ class BoxDockingObjectives(Objectives):
 
     def evaluate(self, token_sequences: list[list[str]]) -> list[ScoredItem]:
         decoded, items, candidate_indices, candidates = _screen_candidates(
-            token_sequences, self.decode_fn, self.lilly_filter
+            token_sequences,
+            self.decode_fn,
+            self.config.rdkit_druglike_filter,
+            self.config.max_br_sascore,
+            self.lilly_filter,
         )
         diagnostics: list[BoxDockingScore | None] = [None] * len(decoded)
         conformer_indices, _, results = _evaluate_candidates(
@@ -855,6 +881,10 @@ class BoxDockingObjectives(Objectives):
             "cumulative_accepted": prior_accepted + len(accepted),
             "decode_failed": reasons.count("AMSR decode failed"),
             "disconnected_failed": reasons.count("molecule is disconnected"),
+            "rdkit_druglike_failed": sum(
+                reason.startswith("RDKit drug-likeness") for reason in reasons
+            ),
+            "br_sascore_failed": sum(reason.startswith("BR-SAScore") for reason in reasons),
             "lilly_failed": sum(reason.startswith("Lilly Medchem Rules") for reason in reasons),
             "conformer_failed": reasons.count("AMSR conformer construction failed"),
             "all_targets_accepted": sum(

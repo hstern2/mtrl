@@ -37,11 +37,19 @@ def _decoded(smiles: str) -> DecodedAMSR:
     return DecodedAMSR(Chem.MolFromSmiles(smiles), {})
 
 
-def _config(output_dir: Path, *, lilly: bool = False) -> ScoringConfig:
+def _config(
+    output_dir: Path,
+    *,
+    lilly: bool = False,
+    rdkit_druglike: bool = False,
+    max_br_sascore: float | None = None,
+) -> ScoringConfig:
     return ScoringConfig(
         receptor_pdb=Path("receptor.pdb"),
         reference_sdf=Path("reference.sdf"),
         output_dir=output_dir,
+        rdkit_druglike_filter=rdkit_druglike,
+        max_br_sascore=max_br_sascore,
         lilly_medchem_rules=lilly,
     )
 
@@ -174,6 +182,69 @@ def test_lilly_runs_before_conformer_construction_and_structure_scoring(tmp_path
     assert not scored[0].valid
     assert scored[0].rejection_reason == "Lilly Medchem Rules (-relaxed) failed"
     assert scored[1].valid
+
+
+def test_rdkit_druglike_filter_runs_before_lilly_and_structure_scoring(tmp_path) -> None:
+    decoded = [_decoded("CCCCCCCCCCCCCCCC"), _decoded("Cn1c(=O)c2c(ncn2C)n(C)c1=O")]
+    lilly = FakeLilly([True])
+    pipeline = FakePipeline(
+        [
+            StructureScore(
+                cnn_affinity=6.0,
+                roshambo_tanimoto_combo=0.5,
+                minimized_rmsd=0.2,
+                accepted=True,
+            )
+        ]
+    )
+    suite = DockingObjectives(
+        _config(tmp_path, lilly=True, rdkit_druglike=True),
+        decode_fn=lambda tokens: decoded[int(tokens[0])],
+        conformer_fn=lambda candidate: candidate.mol,
+        pipeline=pipeline,
+        lilly_filter=lilly,
+    )
+
+    scored = suite.evaluate([["0"], ["1"]])
+
+    assert not scored[0].valid
+    assert scored[0].rejection_reason.startswith("RDKit drug-likeness failed: cLogP")
+    assert scored[1].valid
+    assert lilly.seen == [decoded[1].mol]
+    assert pipeline.seen == [decoded[1].mol]
+
+
+def test_br_sascore_filter_runs_before_lilly_and_structure_scoring(tmp_path) -> None:
+    decoded = [
+        _decoded("CN(C)C1=C2CC(Cc3ccccc3)CCC2C=C1"),
+        _decoded("CC(OC1=CC=CC=C1C(O)=O)=O"),
+    ]
+    lilly = FakeLilly([True])
+    pipeline = FakePipeline(
+        [
+            StructureScore(
+                cnn_affinity=6.0,
+                roshambo_tanimoto_combo=0.5,
+                minimized_rmsd=0.2,
+                accepted=True,
+            )
+        ]
+    )
+    suite = DockingObjectives(
+        _config(tmp_path, lilly=True, max_br_sascore=5.0),
+        decode_fn=lambda tokens: decoded[int(tokens[0])],
+        conformer_fn=lambda candidate: candidate.mol,
+        pipeline=pipeline,
+        lilly_filter=lilly,
+    )
+
+    scored = suite.evaluate([["0"], ["1"]])
+
+    assert not scored[0].valid
+    assert scored[0].rejection_reason.startswith("BR-SAScore failed:")
+    assert scored[1].valid
+    assert lilly.seen == [decoded[1].mol]
+    assert pipeline.seen == [decoded[1].mol]
 
 
 def test_disconnected_molecules_are_rejected_before_scoring(tmp_path) -> None:

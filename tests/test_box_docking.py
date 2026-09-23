@@ -341,6 +341,8 @@ def test_box_config_round_trips_rigid_refine_mode(tmp_path, monkeypatch) -> None
         docking_mode="rigid-refine",
         gnina_timeout_seconds=321,
         qed_objective=True,
+        rdkit_druglike_filter=True,
+        max_br_sascore=5.0,
         posebusters_config="dock-fast",
         posebusters_timeout_seconds=123,
     )
@@ -351,10 +353,23 @@ def test_box_config_round_trips_rigid_refine_mode(tmp_path, monkeypatch) -> None
     assert restored.docking_mode == "rigid-refine"
     assert restored.gnina_timeout_seconds == 321
     assert restored.qed_objective is True
+    assert restored.rdkit_druglike_filter is True
+    assert restored.max_br_sascore == 5.0
     assert restored.posebusters_config == "dock-fast"
     assert restored.posebusters_timeout_seconds == 123
     assert restored.targets == config.targets
     assert os.environ[CONFIG_ENV]
+
+
+def test_box_config_rejects_invalid_br_sascore_cutoff(tmp_path) -> None:
+    config = BoxScoringConfig(
+        targets=(_targets(tmp_path)[0],),
+        output_dir=tmp_path / "out",
+        max_br_sascore=0.0,
+    )
+
+    with pytest.raises(ValueError, match="max_br_sascore must be between 1 and 10"):
+        config.validate()
 
 
 @pytest.mark.parametrize(
