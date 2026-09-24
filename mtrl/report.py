@@ -48,6 +48,8 @@ def write_run_summary(output_dir: Path, destination: Path | None = None) -> Path
         ("AMSR decode", "decode_failed"),
         ("Disconnected molecule", "disconnected_failed"),
         ("RDKit drug-likeness", "rdkit_druglike_failed"),
+        ("Muegge filter", "muegge_failed"),
+        ("Brenk filter", "brenk_failed"),
         ("BR-SAScore", "br_sascore_failed"),
         ("Lilly Medchem Rules (-relaxed)", "lilly_failed"),
         ("AMSR conformer construction", "conformer_failed"),

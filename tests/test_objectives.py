@@ -42,6 +42,8 @@ def _config(
     *,
     lilly: bool = False,
     rdkit_druglike: bool = False,
+    muegge: bool = False,
+    brenk: bool = False,
     max_br_sascore: float | None = None,
 ) -> ScoringConfig:
     return ScoringConfig(
@@ -49,6 +51,8 @@ def _config(
         reference_sdf=Path("reference.sdf"),
         output_dir=output_dir,
         rdkit_druglike_filter=rdkit_druglike,
+        muegge_filter=muegge,
+        brenk_filter=brenk,
         max_br_sascore=max_br_sascore,
         lilly_medchem_rules=lilly,
     )
@@ -245,6 +249,35 @@ def test_br_sascore_filter_runs_before_lilly_and_structure_scoring(tmp_path) -> 
     assert scored[1].valid
     assert lilly.seen == [decoded[1].mol]
     assert pipeline.seen == [decoded[1].mol]
+
+
+@pytest.mark.parametrize("filter_name", ["muegge", "brenk"])
+def test_named_medchem_filters_run_before_structure_scoring(tmp_path, filter_name) -> None:
+    rejected = _decoded("O=C(CCCCCCc1ccccc1)Cc1ccccc1")
+    accepted = _decoded("CC(C)Cc1ccc([C@@H](C)C(=O)O)cc1")
+    pipeline = FakePipeline(
+        [
+            StructureScore(
+                cnn_affinity=6.0,
+                roshambo_tanimoto_combo=0.5,
+                minimized_rmsd=0.2,
+                accepted=True,
+            )
+        ]
+    )
+    suite = DockingObjectives(
+        _config(tmp_path, **{filter_name: True}),
+        decode_fn=lambda tokens: [rejected, accepted][int(tokens[0])],
+        conformer_fn=lambda candidate: candidate.mol,
+        pipeline=pipeline,
+    )
+
+    scored = suite.evaluate([["0"], ["1"]])
+
+    assert not scored[0].valid
+    assert scored[0].rejection_reason.startswith(filter_name.capitalize())
+    assert scored[1].valid
+    assert pipeline.seen == [accepted.mol]
 
 
 def test_disconnected_molecules_are_rejected_before_scoring(tmp_path) -> None:

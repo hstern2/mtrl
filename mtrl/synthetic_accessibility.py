@@ -30,9 +30,7 @@ def br_sascore(mol: Mol) -> float:
     molecule = Chem.RemoveHs(mol)
     bit_output = rdFingerprintGenerator.AdditionalOutput()
     bit_output.AllocateBitInfoMap()
-    fingerprint = _MORGAN_GENERATOR.GetSparseCountFingerprint(
-        molecule, additionalOutput=bit_output
-    )
+    fingerprint = _MORGAN_GENERATOR.GetSparseCountFingerprint(molecule, additionalOutput=bit_output)
     bit_information = bit_output.GetBitInfoMap()
     fragment_scores = _fragment_scores()
     rare_scores = []

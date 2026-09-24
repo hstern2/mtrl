@@ -303,6 +303,8 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
             str(targets),
             "--lilly-medchem-rules",
             "--rdkit-druglike-filter",
+            "--muegge-filter",
+            "--brenk-filter",
             "--max-br-sascore",
             "5",
             "--target-failure-score",
@@ -334,6 +336,8 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
     assert scoring_config["targets"][0]["name"] == "q_open"
     assert scoring_config["lilly_medchem_rules"] is True
     assert scoring_config["rdkit_druglike_filter"] is True
+    assert scoring_config["muegge_filter"] is True
+    assert scoring_config["brenk_filter"] is True
     assert scoring_config["max_br_sascore"] == 5.0
     assert scoring_config["target_failure_score"] == -1.5
     assert scoring_config["accept_targets"] == "all"
@@ -344,6 +348,8 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
     assert scoring_config["qed_objective"] is True
     run_config = json.loads((output / "run_config.json").read_text())
     assert run_config["rdkit_druglike_filter"] is True
+    assert run_config["muegge_filter"] is True
+    assert run_config["brenk_filter"] is True
     assert run_config["max_br_sascore"] == 5.0
     assert "N-dimensional Pareto" in run_config["reward"]
     assert received["objectives_path"] == "mtrl.objectives:build"
@@ -426,6 +432,8 @@ def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -
             "dock-fast",
             "--qed-objective",
             "--rdkit-druglike-filter",
+            "--muegge-filter",
+            "--brenk-filter",
             "--max-br-sascore",
             "5",
             "--output-dir",
@@ -443,5 +451,7 @@ def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -
     assert received["config"].posebusters_config == "dock-fast"
     assert received["config"].qed_objective is True
     assert received["config"].rdkit_druglike_filter is True
+    assert received["config"].muegge_filter is True
+    assert received["config"].brenk_filter is True
     assert received["config"].max_br_sascore == 5.0
     assert '"retained_molecules": 1' in result.stdout

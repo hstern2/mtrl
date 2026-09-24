@@ -144,3 +144,51 @@ def test_score_sdf_applies_property_and_br_sascore_filters_before_docking(tmp_pa
     assert records[0]["rejection_reason"].startswith("RDKit drug-likeness failed:")
     assert records[1]["rejection_reason"].startswith("BR-SAScore failed:")
     assert records[2]["accepted"]
+
+
+def test_score_sdf_applies_muegge_and_brenk_before_docking(tmp_path) -> None:
+    input_sdf = tmp_path / "input.sdf"
+    writer = Chem.SDWriter(str(input_sdf))
+    writer.write(_mol3d_from_smiles("O=C(CCCCCCc1ccccc1)Cc1ccccc1", "underfunctionalized"))
+    writer.write(_mol3d_from_smiles("CCCCCOc1cc2c(cc1OC)-c1cccc(=O)n1CC2", "long_chain"))
+    writer.write(_mol3d_from_smiles("CC(C)Cc1ccc([C@@H](C)C(=O)O)cc1", "ibuprofen"))
+    writer.close()
+
+    receptor = tmp_path / "receptor.pdb"
+    receptor.write_text("END\n")
+    target = DockingTarget(
+        name="site_a",
+        receptor_pdb=receptor,
+        center=(1.0, 2.0, 3.0),
+        size=(20.0, 20.0, 20.0),
+    )
+    result = BoxDockingScore(
+        targets={
+            "site_a": TargetDockingScore(
+                target_name="site_a",
+                cnn_affinity=6.0,
+                accepted=True,
+                pose=_mol3d(),
+            )
+        },
+        accepted=True,
+    )
+    pipeline = FakePipeline(result)
+    config = BoxScoringConfig(
+        targets=(target,),
+        output_dir=tmp_path / "scored",
+        muegge_filter=True,
+        brenk_filter=True,
+    )
+
+    summary = score_sdf(input_sdf, config, pipeline=pipeline)
+
+    assert summary["input_records"] == 3
+    assert summary["retained_molecules"] == 1
+    assert [mol.GetProp("_Name") for mol in pipeline.seen] == ["ibuprofen"]
+    records = [
+        json.loads(line) for line in (config.output_dir / "scores.jsonl").read_text().splitlines()
+    ]
+    assert records[0]["rejection_reason"].startswith("Muegge filter failed:")
+    assert records[1]["rejection_reason"] == "Brenk filter failed: Aliphatic_long_chain"
+    assert records[2]["accepted"]

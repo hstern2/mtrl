@@ -126,6 +126,8 @@ class ScoringConfig:
     lilly_rules_executable: str = "Lilly_Medchem_Rules.rb"
     verbose_tools: bool = False
     evaluation_workers: int = 1
+    muegge_filter: bool = False
+    brenk_filter: bool = False
 
     def validate(self) -> None:
         if not self.receptor_pdb.is_file():
@@ -185,6 +187,8 @@ class BoxScoringConfig:
     qed_objective: bool = False
     posebusters_config: PoseBustersConfig = "dock"
     posebusters_timeout_seconds: int = 600
+    muegge_filter: bool = False
+    brenk_filter: bool = False
 
     def validate(self) -> None:
         if not self.targets:
@@ -216,6 +220,8 @@ class BoxScoringConfig:
             "targets": [target.to_dict() for target in self.targets],
             "output_dir": str(self.output_dir),
             "rdkit_druglike_filter": self.rdkit_druglike_filter,
+            "muegge_filter": self.muegge_filter,
+            "brenk_filter": self.brenk_filter,
             "max_br_sascore": self.max_br_sascore,
             "lilly_medchem_rules": self.lilly_medchem_rules,
             "lilly_rules_executable": self.lilly_rules_executable,

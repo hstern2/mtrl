@@ -118,6 +118,16 @@ def score(
         "--rdkit-druglike-filter/--no-rdkit-druglike-filter",
         help="Apply RDKit Rule-of-Five and Veber property limits before docking",
     ),
+    muegge_filter: bool = typer.Option(
+        False,
+        "--muegge-filter/--no-muegge-filter",
+        help="Apply the Muegge drug-likeness filter before docking",
+    ),
+    brenk_filter: bool = typer.Option(
+        False,
+        "--brenk-filter/--no-brenk-filter",
+        help="Reject molecules matching the RDKit Brenk alert catalog",
+    ),
     max_br_sascore: float | None = typer.Option(
         None,
         "--max-br-sascore",
@@ -172,6 +182,8 @@ def score(
             targets=targets,
             output_dir=output_dir.resolve(),
             rdkit_druglike_filter=rdkit_druglike_filter,
+            muegge_filter=muegge_filter,
+            brenk_filter=brenk_filter,
             max_br_sascore=max_br_sascore,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
@@ -415,6 +427,21 @@ def rl(
             "Apply RDKit Rule-of-Five and Veber property limits before costly 3D "
             "scoring; failures receive no reward"
         ),
+        rich_help_panel="Molecule gates",
+    ),
+    muegge_filter: bool = typer.Option(
+        False,
+        "--muegge-filter/--no-muegge-filter",
+        help=(
+            "Apply the Muegge drug-likeness filter before costly 3D scoring; "
+            "failures receive no reward"
+        ),
+        rich_help_panel="Molecule gates",
+    ),
+    brenk_filter: bool = typer.Option(
+        False,
+        "--brenk-filter/--no-brenk-filter",
+        help=("Reject molecules matching the RDKit Brenk alert catalog before costly 3D scoring"),
         rich_help_panel="Molecule gates",
     ),
     max_br_sascore: float | None = typer.Option(
@@ -675,6 +702,8 @@ def rl(
             targets=targets,
             output_dir=output_dir,
             rdkit_druglike_filter=rdkit_druglike_filter,
+            muegge_filter=muegge_filter,
+            brenk_filter=brenk_filter,
             max_br_sascore=max_br_sascore,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
@@ -696,6 +725,8 @@ def rl(
             reference_sdf=reference_sdf.resolve(),
             output_dir=output_dir,
             rdkit_druglike_filter=rdkit_druglike_filter,
+            muegge_filter=muegge_filter,
+            brenk_filter=brenk_filter,
             max_br_sascore=max_br_sascore,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
@@ -733,6 +764,8 @@ def rl(
                     ),
                     "qed_objective": qed_objective if docking_targets is not None else None,
                     "rdkit_druglike_filter": rdkit_druglike_filter,
+                    "muegge_filter": muegge_filter,
+                    "brenk_filter": brenk_filter,
                     "max_br_sascore": max_br_sascore,
                     "iterations": iterations,
                     "kl_beta": kl_beta,

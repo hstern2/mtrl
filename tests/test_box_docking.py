@@ -342,6 +342,8 @@ def test_box_config_round_trips_rigid_refine_mode(tmp_path, monkeypatch) -> None
         gnina_timeout_seconds=321,
         qed_objective=True,
         rdkit_druglike_filter=True,
+        muegge_filter=True,
+        brenk_filter=True,
         max_br_sascore=5.0,
         posebusters_config="dock-fast",
         posebusters_timeout_seconds=123,
@@ -354,6 +356,8 @@ def test_box_config_round_trips_rigid_refine_mode(tmp_path, monkeypatch) -> None
     assert restored.gnina_timeout_seconds == 321
     assert restored.qed_objective is True
     assert restored.rdkit_druglike_filter is True
+    assert restored.muegge_filter is True
+    assert restored.brenk_filter is True
     assert restored.max_br_sascore == 5.0
     assert restored.posebusters_config == "dock-fast"
     assert restored.posebusters_timeout_seconds == 123

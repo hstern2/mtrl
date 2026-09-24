@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import cache
 
 from rdkit import Chem
-from rdkit.Chem import Crippen, Descriptors, Lipinski, Mol, rdMolDescriptors
+from rdkit.Chem import Crippen, Descriptors, FilterCatalog, Lipinski, Mol, rdMolDescriptors
 
 
 @dataclass(frozen=True)
@@ -51,3 +52,43 @@ def druglike_rejection_reason(mol: Mol) -> str | None:
     if not violations:
         return None
     return f"RDKit drug-likeness failed: {'; '.join(violations)}"
+
+
+def muegge_rejection_reason(mol: Mol) -> str | None:
+    """Return Muegge drug-likeness violations, or ``None`` when it passes."""
+    parent = Chem.RemoveHs(mol)
+    properties = druglike_properties(parent)
+    rings = int(rdMolDescriptors.CalcNumRings(parent))
+    carbons = sum(atom.GetAtomicNum() == 6 for atom in parent.GetAtoms())
+    heteroatoms = int(rdMolDescriptors.CalcNumHeteroatoms(parent))
+    checks = (
+        ("molecular weight", 200.0 <= properties.molecular_weight <= 600.0),
+        ("cLogP", -2.0 <= properties.clogp <= 5.0),
+        ("TPSA", properties.tpsa <= 150.0),
+        ("rings", rings <= 7),
+        ("carbon atoms", carbons > 4),
+        ("heteroatoms", heteroatoms > 1),
+        ("rotatable bonds", properties.rotatable_bonds <= 15),
+        ("H-bond acceptors", properties.hba <= 10),
+        ("H-bond donors", properties.hbd <= 5),
+    )
+    violations = [name for name, passes in checks if not passes]
+    if not violations:
+        return None
+    return f"Muegge filter failed: {', '.join(violations)}"
+
+
+@cache
+def _brenk_catalog() -> FilterCatalog.FilterCatalog:
+    parameters = FilterCatalog.FilterCatalogParams()
+    parameters.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.BRENK)
+    return FilterCatalog.FilterCatalog(parameters)
+
+
+def brenk_rejection_reason(mol: Mol) -> str | None:
+    """Return matching RDKit Brenk alerts, or ``None`` when there are none."""
+    matches = _brenk_catalog().GetMatches(Chem.RemoveHs(mol))
+    alerts = list(dict.fromkeys(match.GetDescription() for match in matches))
+    if not alerts:
+        return None
+    return f"Brenk filter failed: {', '.join(alerts)}"

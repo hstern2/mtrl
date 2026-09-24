@@ -121,6 +121,8 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl score molecules.sdf \
   --posebusters-timeout-seconds 600 \
   --posebusters-config dock-fast \
   --rdkit-druglike-filter \
+  --muegge-filter \
+  --brenk-filter \
   --max-br-sascore 5 \
   --target-failure-score 0 \
   --accept-targets any \
@@ -134,6 +136,8 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
   --posebusters-timeout-seconds 600 \
   --posebusters-config dock-fast \
   --rdkit-druglike-filter \
+  --muegge-filter \
+  --brenk-filter \
   --max-br-sascore 5 \
   --target-failure-score 0 \
   --accept-targets any \
@@ -145,6 +149,12 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
 All enabled molecule filters run before conformer construction and docking.
 `--rdkit-druglike-filter` enforces molecular weight ≤ 500, cLogP ≤ 5, H-bond
 donors ≤ 5, H-bond acceptors ≤ 10, rotatable bonds ≤ 10, and TPSA ≤ 140.
+`--muegge-filter` applies the published
+[Muegge drug-likeness criteria](https://doi.org/10.1021/jm015507e), including
+the minimum functionality requirement of more than one heteroatom.
+`--brenk-filter` rejects structures matching RDKit's built-in
+[Brenk alert catalog](https://doi.org/10.1002/cmdc.200700139), including long
+aliphatic chains and other undesirable motifs.
 `--max-br-sascore 5` applies the published USPTO/eMolecules BR-SAScore, on which
 1 is easiest and 10 is hardest. Lilly Medchem Rules remains an independent
 structural-alert gate. GNINA performs a full search in every configured box.

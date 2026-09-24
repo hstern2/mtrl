@@ -17,15 +17,14 @@ from trl.objectives.pareto import nsga2_sort
 
 from mtrl import DecodedAMSR, decode_amsr, make_conformer
 from mtrl.config import BoxScoringConfig, ScoringConfig, scoring_mode_from_env
-from mtrl.druglike import druglike_rejection_reason
 from mtrl.lilly import LillyMedchemFilter
+from mtrl.molecule_filters import molecule_filter_rejection_reason
 from mtrl.scoring import (
     BoxDockingPipeline,
     BoxDockingScore,
     StructureScore,
     StructureScoringPipeline,
 )
-from mtrl.synthetic_accessibility import br_sascore_rejection_reason
 
 
 class _ScoringResult(Protocol):
@@ -48,6 +47,8 @@ def _screen_candidates(
     token_sequences: list[list[str]],
     decode_fn: Callable[[list[str]], DecodedAMSR | None],
     rdkit_druglike_filter: bool,
+    muegge_filter: bool,
+    brenk_filter: bool,
     max_br_sascore: float | None,
     lilly_filter: LillyMedchemFilter | None,
 ) -> tuple[list[DecodedAMSR | None], list[ScoredItem], list[int], list[DecodedAMSR]]:
@@ -63,11 +64,12 @@ def _screen_candidates(
         elif len(Chem.GetMolFrags(candidate.mol)) != 1:
             items[index].valid = False
             items[index].rejection_reason = "molecule is disconnected"
-        elif rdkit_druglike_filter and (reason := druglike_rejection_reason(candidate.mol)):
-            items[index].valid = False
-            items[index].rejection_reason = reason
-        elif max_br_sascore is not None and (
-            reason := br_sascore_rejection_reason(candidate.mol, max_br_sascore)
+        elif reason := molecule_filter_rejection_reason(
+            candidate.mol,
+            rdkit_druglike=rdkit_druglike_filter,
+            muegge=muegge_filter,
+            brenk=brenk_filter,
+            max_br_sascore=max_br_sascore,
         ):
             items[index].valid = False
             items[index].rejection_reason = reason
@@ -234,6 +236,8 @@ class DockingObjectives(Objectives):
             token_sequences,
             self.decode_fn,
             self.config.rdkit_druglike_filter,
+            self.config.muegge_filter,
+            self.config.brenk_filter,
             self.config.max_br_sascore,
             self.lilly_filter,
         )
@@ -551,6 +555,8 @@ class DockingObjectives(Objectives):
             "rdkit_druglike_failed": sum(
                 reason.startswith("RDKit drug-likeness") for reason in reasons
             ),
+            "muegge_failed": sum(reason.startswith("Muegge filter") for reason in reasons),
+            "brenk_failed": sum(reason.startswith("Brenk filter") for reason in reasons),
             "br_sascore_failed": sum(reason.startswith("BR-SAScore") for reason in reasons),
             "lilly_failed": sum(reason.startswith("Lilly Medchem Rules") for reason in reasons),
             "conformer_failed": reasons.count("AMSR conformer construction failed"),
@@ -560,6 +566,8 @@ class DockingObjectives(Objectives):
                     reason == "AMSR decode failed"
                     or reason == "molecule is disconnected"
                     or reason.startswith("RDKit drug-likeness")
+                    or reason.startswith("Muegge filter")
+                    or reason.startswith("Brenk filter")
                     or reason.startswith("BR-SAScore")
                     or reason.startswith("Lilly Medchem Rules")
                     or reason == "AMSR conformer construction failed"
@@ -676,6 +684,8 @@ class BoxDockingObjectives(Objectives):
             token_sequences,
             self.decode_fn,
             self.config.rdkit_druglike_filter,
+            self.config.muegge_filter,
+            self.config.brenk_filter,
             self.config.max_br_sascore,
             self.lilly_filter,
         )
@@ -884,6 +894,8 @@ class BoxDockingObjectives(Objectives):
             "rdkit_druglike_failed": sum(
                 reason.startswith("RDKit drug-likeness") for reason in reasons
             ),
+            "muegge_failed": sum(reason.startswith("Muegge filter") for reason in reasons),
+            "brenk_failed": sum(reason.startswith("Brenk filter") for reason in reasons),
             "br_sascore_failed": sum(reason.startswith("BR-SAScore") for reason in reasons),
             "lilly_failed": sum(reason.startswith("Lilly Medchem Rules") for reason in reasons),
             "conformer_failed": reasons.count("AMSR conformer construction failed"),
