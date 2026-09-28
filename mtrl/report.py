@@ -103,7 +103,7 @@ def write_run_summary(output_dir: Path, destination: Path | None = None) -> Path
             else "  Best Tanimoto similarity: n/a",
         ]
     )
-    reference_affinity = latest.get("original_t9c_cnn_affinity")
+    reference_affinity = latest.get("reference_cnn_affinity")
     if reference_affinity:
         lines.append(f"  Reference-ligand gnina CNNaffinity: {float(reference_affinity):.3f}")
     lines.extend(
@@ -260,7 +260,7 @@ def write_affinity_progress(output_dir: Path, destination: Path | None = None) -
         label="generation best",
     )
     axis.plot(generations, running_best, linewidth=2, label="running best")
-    reference_affinity = rows[-1].get("original_t9c_cnn_affinity")
+    reference_affinity = rows[-1].get("reference_cnn_affinity")
     if reference_affinity:
         axis.axhline(
             float(reference_affinity),

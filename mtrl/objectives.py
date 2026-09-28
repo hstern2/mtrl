@@ -5,6 +5,7 @@ import json
 import os
 from collections.abc import Callable
 from csv import DictWriter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
@@ -157,6 +158,14 @@ class RoshamboComboObjective(Objective):
         return [float(item.roshambo_tanimoto_combo) for item in items]
 
 
+@dataclass(frozen=True)
+class BoxObjectiveInput:
+    """Molecule and docking context supplied to every box-mode objective."""
+
+    molecule: Mol
+    docking: BoxDockingScore
+
+
 class BoxCNNaffinityObjective(Objective):
     """CNNaffinity for one named receptor/box target."""
 
@@ -168,7 +177,7 @@ class BoxCNNaffinityObjective(Objective):
     def score_batch(self, items: list[Any]) -> list[float]:
         scores = []
         for item in items:
-            result = item.targets[self.target_name]
+            result = item.docking.targets[self.target_name]
             affinity = result.cnn_affinity if result.accepted else None
             scores.append(float(affinity) if affinity is not None else self.failure_score)
         return scores
@@ -181,7 +190,7 @@ class QEDObjective(Objective):
         super().__init__(name="qed", direction="maximize")
 
     def score_batch(self, items: list[Any]) -> list[float]:
-        return [float(QED.qed(item)) for item in items]
+        return [float(QED.qed(item.molecule)) for item in items]
 
 
 class DockingObjectives(Objectives):
@@ -496,10 +505,10 @@ class DockingObjectives(Objectives):
             None,
         )
         if reference is None:
-            raise RuntimeError(f"cannot read original ligand: {self.config.reference_sdf}")
+            raise RuntimeError(f"cannot read reference ligand: {self.config.reference_sdf}")
         score = self.pipeline.score_batch([reference])[0]
         payload = {
-            "label": "original T9C",
+            "label": "reference ligand",
             "input_sdf": str(self.config.reference_sdf),
             "cnn_affinity": score.cnn_affinity,
             "tanimoto_combo": score.roshambo_tanimoto_combo,
@@ -513,7 +522,7 @@ class DockingObjectives(Objectives):
         )
         if score.minimized_mol is not None:
             mol = Chem.Mol(score.minimized_mol)
-            mol.SetProp("_Name", "original_T9C_GNINA_minimized")
+            mol.SetProp("_Name", "reference_ligand_GNINA_minimized")
             for key, value in payload.items():
                 if value is not None:
                     mol.SetProp(key, str(value))
@@ -580,10 +589,8 @@ class DockingObjectives(Objectives):
             "running_best_cnn_affinity": running_best,
             "mean_tanimoto_combo": float(np.mean(similarities)) if similarities else None,
             "best_tanimoto_combo": max(similarities) if similarities else None,
-            "original_t9c_cnn_affinity": (
-                reference.cnn_affinity if reference is not None else None
-            ),
-            "original_t9c_tanimoto_combo": (
+            "reference_cnn_affinity": (reference.cnn_affinity if reference is not None else None),
+            "reference_tanimoto_combo": (
                 reference.roshambo_tanimoto_combo if reference is not None else None
             ),
         }
@@ -647,6 +654,7 @@ class BoxDockingObjectives(Objectives):
         conformer_fn: Callable[[DecodedAMSR], Mol | None] = make_conformer,
         pipeline: BoxDockingPipeline | None = None,
         lilly_filter: LillyMedchemFilter | None = None,
+        additional_objectives: list[Objective] | None = None,
     ) -> None:
         objectives: list[Objective] = [
             BoxCNNaffinityObjective(target.name, config.target_failure_score)
@@ -654,6 +662,8 @@ class BoxDockingObjectives(Objectives):
         ]
         if config.qed_objective:
             objectives.append(QEDObjective())
+        if additional_objectives:
+            objectives.extend(additional_objectives)
         super().__init__(objectives=objectives, decode_fn=decode_fn)
         self.config = config
         self.generation = 1
@@ -699,6 +709,8 @@ class BoxDockingObjectives(Objectives):
             pipeline_builds_conformers=self._pipeline_owns_conformer_construction,
         )
 
+        objective_indices = []
+        objective_inputs = []
         for index, result in zip(conformer_indices, results, strict=True):
             diagnostics[index] = result
             if not result.accepted:
@@ -707,9 +719,14 @@ class BoxDockingObjectives(Objectives):
                 continue
             candidate = decoded[index]
             assert candidate is not None
+            objective_indices.append(index)
+            objective_inputs.append(BoxObjectiveInput(candidate.mol, result))
+
+        if objective_inputs:
             for objective in self.objectives:
-                source = candidate.mol if isinstance(objective, QEDObjective) else result
-                items[index].scores[objective.name] = objective.score_batch([source])[0]
+                scores = objective.evaluate_batch(objective_inputs)
+                for index, score in zip(objective_indices, scores, strict=True):
+                    items[index].scores[objective.name] = score
 
         payload = {
             "scores": self._score_records(token_sequences, decoded, items, diagnostics),
@@ -807,8 +824,17 @@ class BoxDockingObjectives(Objectives):
         if not records:
             return []
         objective_names = [objective.name for objective in self.objectives]
+        directions = [
+            1.0 if objective.direction == "maximize" else -1.0 for objective in self.objectives
+        ]
         scores = np.asarray(
-            [[record["scores"][name] for name in objective_names] for record in records],
+            [
+                [
+                    record["scores"][name] * direction
+                    for name, direction in zip(objective_names, directions, strict=True)
+                ]
+                for record in records
+            ],
             dtype=float,
         )
         fronts, _ = nsga2_sort(scores)
@@ -820,7 +846,10 @@ class BoxDockingObjectives(Objectives):
         return sorted(
             unique.values(),
             key=lambda record: (
-                *(-record["scores"][name] for name in objective_names),
+                *(
+                    -record["scores"][name] * direction
+                    for name, direction in zip(objective_names, directions, strict=True)
+                ),
                 record["amsr"],
             ),
         )

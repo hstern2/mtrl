@@ -36,7 +36,7 @@ def test_no_plot_before_first_acceptance(tmp_path) -> None:
 
 def test_affinity_progress_plot(tmp_path) -> None:
     (tmp_path / "progress.csv").write_text(
-        "generation,best_cnn_affinity,running_best_cnn_affinity,original_t9c_cnn_affinity\n"
+        "generation,best_cnn_affinity,running_best_cnn_affinity,reference_cnn_affinity\n"
         "1,4.0,4.0,7.0\n"
         "2,,4.0,7.0\n"
     )
@@ -54,7 +54,7 @@ def test_run_summary_reports_cumulative_filters_and_scores(tmp_path) -> None:
         "muegge_failed,brenk_failed,br_sascore_failed,lilly_failed,"
         "conformer_failed,posebusters_failed,scoring_failed,mean_cnn_affinity,"
         "best_cnn_affinity,mean_tanimoto_combo,best_tanimoto_combo,"
-        "original_t9c_cnn_affinity\n"
+        "reference_cnn_affinity\n"
         "1,10,10,5,50,5,1,0,1,1,2,1,2,0,1,1,4.0,6.0,0.4,0.6,7.0\n"
         "2,10,20,8,80,13,0,1,2,2,1,2,0,0,1,0,5.0,6.5,0.5,0.7,7.0\n"
     )

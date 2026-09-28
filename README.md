@@ -175,6 +175,15 @@ SDF per target under `poses/`. `mtrl validate-targets` resolves relative recepto
 paths and validates all names, files, centers, box sizes, exhaustiveness values,
 and mode counts without invoking external scoring tools.
 
+The Python API can add molecular objectives without changing the docking
+pipeline. Pass `Objective` instances through
+`BoxDockingObjectives(additional_objectives=...)`; each objective receives a
+batch of `BoxObjectiveInput` values containing the decoded RDKit molecule and
+all selected per-target poses and diagnostics. Objectives may maximize or
+minimize, and batched evaluation leaves room for more expensive methods such as
+ABFE. Adding such methods to the CLI still requires an explicit configuration
+and execution backend; ABFE itself is not implemented here.
+
 For each selected pose, `scores.jsonl` and the output SDF metadata also record
 `pose_centroid_distance`, the distance in angstroms from the ligand heavy-atom
 centroid to that target's configured box center. This supports calibration and

@@ -616,6 +616,88 @@ def test_qed_changes_four_objective_pareto_reward(tmp_path) -> None:
     assert rewards[0] > rewards[1]
 
 
+def test_additional_objectives_receive_one_batch_of_molecules_and_poses(tmp_path) -> None:
+    from trl.objectives.base import Objective
+
+    class HeavyAtomObjective(Objective):
+        def __init__(self) -> None:
+            super().__init__("heavy_atoms", direction="minimize")
+            self.batch_sizes = []
+
+        def score_batch(self, items):
+            self.batch_sizes.append(len(items))
+            assert all(item.docking.accepted for item in items)
+            return [float(item.molecule.GetNumHeavyAtoms()) for item in items]
+
+    targets = _targets(tmp_path)
+    pose = _mol3d()
+    result = BoxDockingScore(
+        targets={
+            target.name: TargetDockingScore(
+                target_name=target.name,
+                cnn_affinity=5.0,
+                accepted=True,
+                pose=Chem.Mol(pose),
+            )
+            for target in targets
+        },
+        accepted=True,
+    )
+    decoded = [
+        DecodedAMSR(Chem.MolFromSmiles("CC"), {}),
+        DecodedAMSR(Chem.MolFromSmiles("CCO"), {}),
+    ]
+    objective = HeavyAtomObjective()
+    suite = BoxDockingObjectives(
+        BoxScoringConfig(targets=targets, output_dir=tmp_path / "out"),
+        decode_fn=lambda tokens: decoded[int(tokens[0])],
+        conformer_fn=lambda _: pose,
+        pipeline=FakeBoxPipeline(result),
+        additional_objectives=[objective],
+    )
+
+    scored = suite.evaluate([["0"], ["1"]])
+
+    assert objective.batch_sizes == [2]
+    assert [item.scores["heavy_atoms"] for item in scored] == [2.0, 3.0]
+
+
+def test_cumulative_front_respects_minimizing_objectives(tmp_path) -> None:
+    from trl.objectives.base import Objective
+
+    class MinimizeObjective(Objective):
+        def __init__(self) -> None:
+            super().__init__("cost", direction="minimize")
+
+        def score_batch(self, items):
+            return [float(item.molecule.GetNumHeavyAtoms()) for item in items]
+
+    suite = BoxDockingObjectives(
+        BoxScoringConfig(
+            targets=_targets(tmp_path),
+            output_dir=tmp_path / "out",
+        ),
+        pipeline=FakeBoxPipeline(BoxDockingScore()),
+        additional_objectives=[MinimizeObjective()],
+    )
+    records = [
+        {
+            "amsr": label,
+            "scores": {
+                **{
+                    objective.name: 5.0
+                    for objective in suite.objectives
+                    if objective.name != "cost"
+                },
+                "cost": cost,
+            },
+        }
+        for label, cost in (("lower", 1.0), ("higher", 2.0))
+    ]
+
+    assert suite._pareto_front(records) == [records[0]]
+
+
 def test_one_passing_target_keeps_molecule_and_floors_failed_objectives(tmp_path) -> None:
     targets = _targets(tmp_path)
     pose = _mol3d()

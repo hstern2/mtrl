@@ -22,7 +22,7 @@ required-markers = [
 [[package]]
 name = "amsr"
 version = "0.1.6"
-source = { git = "https://github.com/hstern2/amsr?rev=d77d805ef4995689d80581288a49937fbe5f6307#d77d805ef4995689d80581288a49937fbe5f6307" }
+source = { git = "https://github.com/hstern2/amsr.git?rev=d77d805ef4995689d80581288a49937fbe5f6307#d77d805ef4995689d80581288a49937fbe5f6307" }
 dependencies = [
     { name = "anytree" },
     { name = "levenshtein" },
@@ -1125,7 +1125,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "amsr", git = "https://github.com/hstern2/amsr?rev=d77d805ef4995689d80581288a49937fbe5f6307" },
+    { name = "amsr", git = "https://github.com/hstern2/amsr.git?rev=d77d805ef4995689d80581288a49937fbe5f6307" },
     { name = "lad", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", git = "https://github.com/OrogenTX/lad.git?rev=e15343efcdddf9a9b7fb3e025cf30ea3df1a7a23" },
     { name = "matplotlib", specifier = ">=3.8" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
@@ -1137,7 +1137,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
     { name = "torch", marker = "sys_platform != 'darwin'", specifier = ">=2.4,<3", index = "https://download.pytorch.org/whl/cu121" },
     { name = "torch", marker = "sys_platform == 'darwin'", specifier = ">=2.4,<3" },
-    { name = "trl", git = "https://github.com/hstern2/trl?rev=6c6955e4fd4a783834ff4b29858d3d483e5888ff" },
+    { name = "trl", git = "https://github.com/hstern2/trl.git?rev=0fa0a168de093088e08891935ad327951457c51f" },
     { name = "typer", specifier = ">=0.9" },
 ]
 provides-extras = ["dev"]
@@ -2471,7 +2471,7 @@ wheels = [
 [[package]]
 name = "trl"
 version = "0.1.0"
-source = { git = "https://github.com/hstern2/trl?rev=6c6955e4fd4a783834ff4b29858d3d483e5888ff#6c6955e4fd4a783834ff4b29858d3d483e5888ff" }
+source = { git = "https://github.com/hstern2/trl.git?rev=0fa0a168de093088e08891935ad327951457c51f#0fa0a168de093088e08891935ad327951457c51f" }
 dependencies = [
     { name = "numpy" },
     { name = "orjson" },
