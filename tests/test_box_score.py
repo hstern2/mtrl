@@ -97,51 +97,6 @@ def test_score_sdf_keeps_partial_hits_and_writes_only_real_poses(tmp_path) -> No
     assert not (config.output_dir / "poses" / "site_b.sdf").exists()
 
 
-def test_score_sdf_reports_raw_and_clogp_adjusted_affinities(tmp_path) -> None:
-    input_sdf = tmp_path / "input.sdf"
-    molecule = _mol3d_from_smiles("CC(C)Cc1ccc([C@@H](C)C(=O)O)cc1", "ibuprofen")
-    writer = Chem.SDWriter(str(input_sdf))
-    writer.write(molecule)
-    writer.close()
-    receptor = tmp_path / "receptor.pdb"
-    receptor.write_text("END\n")
-    target = DockingTarget(
-        name="site_a",
-        receptor_pdb=receptor,
-        center=(1.0, 2.0, 3.0),
-        size=(20.0, 20.0, 20.0),
-    )
-    result = BoxDockingScore(
-        targets={
-            "site_a": TargetDockingScore(
-                target_name="site_a",
-                cnn_affinity=7.0,
-                accepted=True,
-                pose=_mol3d(),
-            )
-        },
-        accepted=True,
-    )
-    config = BoxScoringConfig(
-        targets=(target,),
-        output_dir=tmp_path / "scored",
-        clogp_soft_target=3.0,
-        clogp_penalty=0.5,
-    )
-
-    score_sdf(input_sdf, config, pipeline=FakePipeline(result))
-
-    record = json.loads((config.output_dir / "scores.jsonl").read_text())
-    penalty = 0.5 * max(0.0, record["clogp"] - 3.0) ** 2
-    assert record["objectives"] == {
-        "clogp_adjusted_cnn_affinity__site_a": pytest.approx(7.0 - penalty)
-    }
-    assert record["raw_objectives"] == {"gnina_cnn_affinity__site_a": 7.0}
-    pose = next(Chem.SDMolSupplier(str(config.output_dir / "poses" / "site_a.sdf")))
-    assert pose.GetDoubleProp("gnina_cnn_affinity__site_a") == 7.0
-    assert pose.GetDoubleProp("cLogP_penalty") == pytest.approx(penalty)
-
-
 def test_score_sdf_applies_property_and_br_sascore_filters_before_docking(tmp_path) -> None:
     input_sdf = tmp_path / "input.sdf"
     writer = Chem.SDWriter(str(input_sdf))

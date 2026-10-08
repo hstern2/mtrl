@@ -125,8 +125,6 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl score molecules.sdf \
   --brenk-filter \
   --max-br-sascore 5 \
   --max-clogp 4 \
-  --clogp-soft-target 3 \
-  --clogp-penalty 0.5 \
   --target-failure-score 0 \
   --accept-targets any \
   --lilly-medchem-rules \
@@ -143,8 +141,6 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
   --brenk-filter \
   --max-br-sascore 5 \
   --max-clogp 4 \
-  --clogp-soft-target 3 \
-  --clogp-penalty 0.5 \
   --target-failure-score 0 \
   --accept-targets any \
   --lilly-medchem-rules \
@@ -163,12 +159,8 @@ the minimum functionality requirement of more than one heteroatom.
 aliphatic chains and other undesirable motifs.
 `--max-br-sascore 5` applies the published USPTO/eMolecules BR-SAScore, on which
 1 is easiest and 10 is hardest. Lilly Medchem Rules remains an independent
-structural-alert gate. `--max-clogp` is an independent hard gate based on
-RDKit cLogP. In box mode, `--clogp-soft-target 3 --clogp-penalty 0.5` subtracts
-`0.5 * max(0, cLogP - 3)^2` from every successful target's CNNaffinity before
-Pareto ranking; failed targets retain their configured failure score. Raw
-CNNaffinities, calculated cLogP, and the applied penalty remain in score records
-and pose SDF properties. GNINA performs a full search in every configured box.
+structural-alert gate. `--max-clogp 4` independently rejects molecules whose
+RDKit cLogP exceeds 4. GNINA performs a full search in every configured box.
 Every returned pose is checked with the receptor-aware PoseBusters docking
 configuration, and each objective uses the highest `CNNaffinity` among that
 target's passing poses. A molecule is retained when at least one target has a

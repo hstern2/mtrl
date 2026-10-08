@@ -346,8 +346,6 @@ def test_box_config_round_trips_rigid_refine_mode(tmp_path, monkeypatch) -> None
         brenk_filter=True,
         max_br_sascore=5.0,
         max_clogp=4.0,
-        clogp_soft_target=3.0,
-        clogp_penalty=0.5,
         posebusters_config="dock-fast",
         posebusters_timeout_seconds=123,
     )
@@ -363,8 +361,6 @@ def test_box_config_round_trips_rigid_refine_mode(tmp_path, monkeypatch) -> None
     assert restored.brenk_filter is True
     assert restored.max_br_sascore == 5.0
     assert restored.max_clogp == 4.0
-    assert restored.clogp_soft_target == 3.0
-    assert restored.clogp_penalty == 0.5
     assert restored.posebusters_config == "dock-fast"
     assert restored.posebusters_timeout_seconds == 123
     assert restored.targets == config.targets
@@ -382,26 +378,14 @@ def test_box_config_rejects_invalid_br_sascore_cutoff(tmp_path) -> None:
         config.validate()
 
 
-@pytest.mark.parametrize(
-    ("values", "message"),
-    [
-        ({"max_clogp": float("inf")}, "max_clogp must be finite"),
-        ({"clogp_penalty": 0.5}, "clogp_penalty requires clogp_soft_target"),
-        ({"clogp_soft_target": 3.0}, "requires a positive clogp_penalty"),
-        (
-            {"max_clogp": 3.0, "clogp_soft_target": 4.0, "clogp_penalty": 0.5},
-            "must not exceed max_clogp",
-        ),
-    ],
-)
-def test_box_config_rejects_invalid_clogp_settings(tmp_path, values, message) -> None:
+def test_box_config_rejects_nonfinite_clogp_cutoff(tmp_path) -> None:
     config = BoxScoringConfig(
         targets=(_targets(tmp_path)[0],),
         output_dir=tmp_path / "out",
-        **values,
+        max_clogp=float("inf"),
     )
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError, match="max_clogp must be finite"):
         config.validate()
 
 
@@ -776,51 +760,6 @@ def test_one_passing_target_keeps_molecule_and_floors_failed_objectives(tmp_path
     record = json.loads((tmp_path / "out" / "scores.jsonl").read_text())
     assert record["accepted"]
     assert not record["targets"]["c_open"]["accepted"]
-
-
-def test_clogp_penalty_adjusts_successes_but_not_failed_target_floor(tmp_path) -> None:
-    targets = _targets(tmp_path)[:2]
-    molecule = Chem.MolFromSmiles("CC(C)Cc1ccc([C@@H](C)C(=O)O)cc1")
-    assert molecule is not None
-    pose = _mol3d()
-    result = BoxDockingScore(
-        targets={
-            "q_open": TargetDockingScore(
-                target_name="q_open",
-                cnn_affinity=7.25,
-                accepted=True,
-                pose=Chem.Mol(pose),
-            ),
-            "c_open": TargetDockingScore(target_name="c_open", rejection_reason="no pose"),
-        },
-        accepted=True,
-    )
-    suite = BoxDockingObjectives(
-        BoxScoringConfig(
-            targets=targets,
-            output_dir=tmp_path / "out",
-            target_failure_score=0.0,
-            clogp_soft_target=3.0,
-            clogp_penalty=0.5,
-        ),
-        decode_fn=lambda _: DecodedAMSR(molecule, {}),
-        conformer_fn=lambda _: pose,
-        pipeline=FakeBoxPipeline(result),
-    )
-
-    scored = suite.evaluate([["candidate"]])[0]
-    record = json.loads((tmp_path / "out" / "scores.jsonl").read_text())
-
-    penalty = 0.5 * max(0.0, record["clogp"] - 3.0) ** 2
-    assert scored.scores == {
-        "clogp_adjusted_cnn_affinity__q_open": pytest.approx(7.25 - penalty),
-        "clogp_adjusted_cnn_affinity__c_open": 0.0,
-    }
-    assert record["raw_objectives"] == {
-        "gnina_cnn_affinity__q_open": 7.25,
-        "gnina_cnn_affinity__c_open": 0.0,
-    }
-    assert record["clogp_penalty"] == pytest.approx(penalty)
 
 
 def test_pose_names_are_stable_across_target_files_with_partial_hits(tmp_path) -> None:

@@ -1,9 +1,7 @@
-import pytest
 from rdkit import Chem
 
 from mtrl.druglike import (
     brenk_rejection_reason,
-    clogp_excess_penalty,
     clogp_rejection_reason,
     druglike_properties,
     druglike_rejection_reason,
@@ -21,14 +19,11 @@ def test_common_druglike_molecule_passes() -> None:
     assert properties.tpsa < 140
 
 
-def test_clogp_gate_and_soft_penalty_are_independent() -> None:
+def test_explicit_clogp_gate_can_be_stricter_than_muegge() -> None:
     ibuprofen = Chem.MolFromSmiles("CC(C)Cc1ccc([C@@H](C)C(=O)O)cc1")
 
     assert clogp_rejection_reason(ibuprofen, 4.0) is None
     assert clogp_rejection_reason(ibuprofen, 3.0).startswith("cLogP filter failed:")
-    assert clogp_excess_penalty(ibuprofen, None, 0.5) == 0.0
-    expected = 0.5 * max(0.0, druglike_properties(ibuprofen).clogp - 3.0) ** 2
-    assert clogp_excess_penalty(ibuprofen, 3.0, 0.5) == pytest.approx(expected)
 
 
 def test_greasy_alkane_is_rejected_by_clogp() -> None:

@@ -41,14 +41,6 @@ def clogp_rejection_reason(mol: Mol, maximum: float) -> str | None:
     return f"cLogP filter failed: cLogP {value:g} > {maximum:g}"
 
 
-def clogp_excess_penalty(mol: Mol, target: float | None, coefficient: float) -> float:
-    """Quadratic penalty above a soft cLogP target."""
-    if target is None or coefficient == 0:
-        return 0.0
-    excess = max(0.0, druglike_properties(mol).clogp - target)
-    return coefficient * excess**2
-
-
 def druglike_rejection_reason(mol: Mol) -> str | None:
     """Return Rule-of-Five/Veber violations, or ``None`` when the molecule passes."""
     properties = druglike_properties(mol)

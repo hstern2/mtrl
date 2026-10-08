@@ -115,23 +115,9 @@ def _validate_max_br_sascore(value: float | None) -> None:
         raise ValueError("max_br_sascore must be between 1 and 10")
 
 
-def _validate_lipophilicity(
-    max_clogp: float | None,
-    clogp_soft_target: float | None = None,
-    clogp_penalty: float = 0.0,
-) -> None:
-    if max_clogp is not None and not math.isfinite(max_clogp):
+def _validate_max_clogp(value: float | None) -> None:
+    if value is not None and not math.isfinite(value):
         raise ValueError("max_clogp must be finite")
-    if clogp_soft_target is not None and not math.isfinite(clogp_soft_target):
-        raise ValueError("clogp_soft_target must be finite")
-    if not math.isfinite(clogp_penalty) or clogp_penalty < 0:
-        raise ValueError("clogp_penalty must be finite and >= 0")
-    if clogp_soft_target is None and clogp_penalty != 0:
-        raise ValueError("clogp_penalty requires clogp_soft_target")
-    if clogp_soft_target is not None and clogp_penalty == 0:
-        raise ValueError("clogp_soft_target requires a positive clogp_penalty")
-    if max_clogp is not None and clogp_soft_target is not None and clogp_soft_target > max_clogp:
-        raise ValueError("clogp_soft_target must not exceed max_clogp")
 
 
 @dataclass(frozen=True)
@@ -157,7 +143,7 @@ class ScoringConfig:
         if self.evaluation_workers <= 0:
             raise ValueError("evaluation_workers must be > 0")
         _validate_max_br_sascore(self.max_br_sascore)
-        _validate_lipophilicity(self.max_clogp)
+        _validate_max_clogp(self.max_clogp)
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -211,8 +197,6 @@ class BoxScoringConfig:
     muegge_filter: bool = False
     brenk_filter: bool = False
     max_clogp: float | None = None
-    clogp_soft_target: float | None = None
-    clogp_penalty: float = 0.0
 
     def validate(self) -> None:
         if not self.targets:
@@ -225,7 +209,7 @@ class BoxScoringConfig:
         if self.evaluation_workers <= 0:
             raise ValueError("evaluation_workers must be > 0")
         _validate_max_br_sascore(self.max_br_sascore)
-        _validate_lipophilicity(self.max_clogp, self.clogp_soft_target, self.clogp_penalty)
+        _validate_max_clogp(self.max_clogp)
         if not math.isfinite(self.target_failure_score):
             raise ValueError("target_failure_score must be finite")
         if self.accept_targets not in {"any", "all"}:
@@ -249,8 +233,6 @@ class BoxScoringConfig:
             "brenk_filter": self.brenk_filter,
             "max_br_sascore": self.max_br_sascore,
             "max_clogp": self.max_clogp,
-            "clogp_soft_target": self.clogp_soft_target,
-            "clogp_penalty": self.clogp_penalty,
             "lilly_medchem_rules": self.lilly_medchem_rules,
             "lilly_rules_executable": self.lilly_rules_executable,
             "verbose_tools": self.verbose_tools,
