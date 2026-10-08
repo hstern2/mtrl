@@ -8,6 +8,8 @@ from rdkit import Chem
 from rdkit.Chem import QED, Mol
 
 from mtrl.config import BoxScoringConfig
+from mtrl.docking_metrics import cnn_affinity_scores
+from mtrl.druglike import clogp_excess_penalty, druglike_properties
 from mtrl.lilly import LillyMedchemFilter
 from mtrl.molecule_filters import molecule_filter_rejection_reason
 from mtrl.scoring import BoxDockingPipeline, BoxDockingScore
@@ -16,15 +18,13 @@ from mtrl.scoring import BoxDockingPipeline, BoxDockingScore
 def _objective_scores(
     result: BoxDockingScore, config: BoxScoringConfig, mol: Mol
 ) -> dict[str, float]:
-    scores = {}
-    for target in config.targets:
-        target_result = result.targets[target.name]
-        value = (
-            float(target_result.cnn_affinity)
-            if target_result.accepted and target_result.cnn_affinity is not None
-            else config.target_failure_score
-        )
-        scores[f"gnina_cnn_affinity__{target.name}"] = value
+    penalty = clogp_excess_penalty(mol, config.clogp_soft_target, config.clogp_penalty)
+    scores = cnn_affinity_scores(
+        result,
+        config,
+        penalty=penalty,
+        adjusted=config.clogp_soft_target is not None,
+    )
     if config.qed_objective:
         scores["qed"] = float(QED.qed(Chem.RemoveHs(mol)))
     return scores
@@ -51,6 +51,10 @@ def _write_pose_sdfs(
                 output.SetProp("docking_target", target_name)
                 for objective_name, value in record["objectives"].items():
                     output.SetProp(objective_name, str(value))
+                for objective_name, value in record["raw_objectives"].items():
+                    output.SetProp(objective_name, str(value))
+                output.SetProp("cLogP", str(record["clogp"]))
+                output.SetProp("cLogP_penalty", str(record["clogp_penalty"]))
                 for key, value in record["targets"][target_name].items():
                     if value is not None:
                         encoded = (
@@ -88,6 +92,9 @@ def score_sdf(
             "accepted": False,
             "rejection_reason": "",
             "objectives": {},
+            "raw_objectives": {},
+            "clogp": None,
+            "clogp_penalty": None,
             "targets": {},
         }
         if mol is None:
@@ -105,6 +112,7 @@ def score_sdf(
             muegge=config.muegge_filter,
             brenk=config.brenk_filter,
             max_br_sascore=config.max_br_sascore,
+            max_clogp=config.max_clogp,
         ):
             record["rejection_reason"] = reason
         elif mol.GetNumConformers() == 0 or not mol.GetConformer().Is3D():
@@ -145,6 +153,11 @@ def score_sdf(
         record["accepted"] = result.accepted
         record["rejection_reason"] = result.rejection_reason
         record["objectives"] = _objective_scores(result, config, mol)
+        record["raw_objectives"] = cnn_affinity_scores(result, config)
+        record["clogp"] = druglike_properties(mol).clogp
+        record["clogp_penalty"] = clogp_excess_penalty(
+            mol, config.clogp_soft_target, config.clogp_penalty
+        )
         record["targets"] = {
             name: target_result.to_record() for name, target_result in result.targets.items()
         }

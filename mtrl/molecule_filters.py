@@ -4,6 +4,7 @@ from rdkit.Chem import Mol
 
 from mtrl.druglike import (
     brenk_rejection_reason,
+    clogp_rejection_reason,
     druglike_rejection_reason,
     muegge_rejection_reason,
 )
@@ -17,6 +18,7 @@ def molecule_filter_rejection_reason(
     muegge: bool = False,
     brenk: bool = False,
     max_br_sascore: float | None = None,
+    max_clogp: float | None = None,
 ) -> str | None:
     """Apply enabled inexpensive 2D gates in a stable order."""
     checks = (
@@ -27,6 +29,8 @@ def molecule_filter_rejection_reason(
     for enabled, rejection_reason in checks:
         if enabled and (reason := rejection_reason(mol)):
             return reason
+    if max_clogp is not None and (reason := clogp_rejection_reason(mol, max_clogp)):
+        return reason
     if max_br_sascore is not None:
         return br_sascore_rejection_reason(mol, max_br_sascore)
     return None

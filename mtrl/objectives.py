@@ -18,6 +18,8 @@ from trl.objectives.pareto import nsga2_sort
 
 from mtrl import DecodedAMSR, decode_amsr, make_conformer
 from mtrl.config import BoxScoringConfig, ScoringConfig, scoring_mode_from_env
+from mtrl.docking_metrics import cnn_affinity_scores
+from mtrl.druglike import clogp_excess_penalty, druglike_properties
 from mtrl.lilly import LillyMedchemFilter
 from mtrl.molecule_filters import molecule_filter_rejection_reason
 from mtrl.scoring import (
@@ -51,6 +53,7 @@ def _screen_candidates(
     muegge_filter: bool,
     brenk_filter: bool,
     max_br_sascore: float | None,
+    max_clogp: float | None,
     lilly_filter: LillyMedchemFilter | None,
 ) -> tuple[list[DecodedAMSR | None], list[ScoredItem], list[int], list[DecodedAMSR]]:
     """Decode candidates and apply inexpensive molecule-level gates."""
@@ -71,6 +74,7 @@ def _screen_candidates(
             muegge=muegge_filter,
             brenk=brenk_filter,
             max_br_sascore=max_br_sascore,
+            max_clogp=max_clogp,
         ):
             items[index].valid = False
             items[index].rejection_reason = reason
@@ -164,22 +168,32 @@ class BoxObjectiveInput:
 
     molecule: Mol
     docking: BoxDockingScore
+    clogp_penalty: float = 0.0
 
 
 class BoxCNNaffinityObjective(Objective):
     """CNNaffinity for one named receptor/box target."""
 
-    def __init__(self, target_name: str, failure_score: float = 0.0) -> None:
+    def __init__(
+        self,
+        target_name: str,
+        failure_score: float = 0.0,
+        *,
+        apply_clogp_penalty: bool = False,
+    ) -> None:
         self.target_name = target_name
         self.failure_score = failure_score
-        super().__init__(name=f"gnina_cnn_affinity__{target_name}", direction="maximize")
+        prefix = "clogp_adjusted_cnn_affinity" if apply_clogp_penalty else "gnina_cnn_affinity"
+        super().__init__(name=f"{prefix}__{target_name}", direction="maximize")
 
     def score_batch(self, items: list[Any]) -> list[float]:
         scores = []
         for item in items:
             result = item.docking.targets[self.target_name]
             affinity = result.cnn_affinity if result.accepted else None
-            scores.append(float(affinity) if affinity is not None else self.failure_score)
+            scores.append(
+                float(affinity) - item.clogp_penalty if affinity is not None else self.failure_score
+            )
         return scores
 
 
@@ -248,6 +262,7 @@ class DockingObjectives(Objectives):
             self.config.muegge_filter,
             self.config.brenk_filter,
             self.config.max_br_sascore,
+            self.config.max_clogp,
             self.lilly_filter,
         )
         diagnostics: list[StructureScore | None] = [None] * len(decoded)
@@ -657,7 +672,11 @@ class BoxDockingObjectives(Objectives):
         additional_objectives: list[Objective] | None = None,
     ) -> None:
         objectives: list[Objective] = [
-            BoxCNNaffinityObjective(target.name, config.target_failure_score)
+            BoxCNNaffinityObjective(
+                target.name,
+                config.target_failure_score,
+                apply_clogp_penalty=config.clogp_soft_target is not None,
+            )
             for target in config.targets
         ]
         if config.qed_objective:
@@ -697,6 +716,7 @@ class BoxDockingObjectives(Objectives):
             self.config.muegge_filter,
             self.config.brenk_filter,
             self.config.max_br_sascore,
+            self.config.max_clogp,
             self.lilly_filter,
         )
         diagnostics: list[BoxDockingScore | None] = [None] * len(decoded)
@@ -720,7 +740,17 @@ class BoxDockingObjectives(Objectives):
             candidate = decoded[index]
             assert candidate is not None
             objective_indices.append(index)
-            objective_inputs.append(BoxObjectiveInput(candidate.mol, result))
+            objective_inputs.append(
+                BoxObjectiveInput(
+                    candidate.mol,
+                    result,
+                    clogp_excess_penalty(
+                        candidate.mol,
+                        self.config.clogp_soft_target,
+                        self.config.clogp_penalty,
+                    ),
+                )
+            )
 
         if objective_inputs:
             for objective in self.objectives:
@@ -782,6 +812,7 @@ class BoxDockingObjectives(Objectives):
                     "accepted": item.valid,
                     "rejection_reason": item.rejection_reason,
                     "objectives": dict(item.scores),
+                    **self._score_metadata(candidate, diagnostic),
                     "targets": target_diagnostics,
                 }
             )
@@ -814,11 +845,31 @@ class BoxDockingObjectives(Objectives):
                     "amsr": "".join(tokens),
                     "smiles": Chem.MolToSmiles(candidate.mol, isomericSmiles=True),
                     "scores": dict(item.scores),
+                    **self._score_metadata(candidate, diagnostic),
                     "targets": target_metadata,
                     "pose_blocks": pose_blocks,
                 }
             )
         return records
+
+    def _score_metadata(
+        self,
+        candidate: DecodedAMSR | None,
+        diagnostic: BoxDockingScore | None,
+    ) -> dict[str, Any]:
+        if candidate is None:
+            return {"clogp": None, "clogp_penalty": None, "raw_objectives": {}}
+        return {
+            "clogp": druglike_properties(candidate.mol).clogp,
+            "clogp_penalty": clogp_excess_penalty(
+                candidate.mol,
+                self.config.clogp_soft_target,
+                self.config.clogp_penalty,
+            ),
+            "raw_objectives": cnn_affinity_scores(diagnostic, self.config)
+            if diagnostic is not None
+            else {},
+        }
 
     def _pareto_front(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not records:
@@ -892,6 +943,10 @@ class BoxDockingObjectives(Objectives):
                     mol.SetProp("docking_target", target.name)
                     for objective_name, value in record["scores"].items():
                         mol.SetProp(objective_name, str(value))
+                    for objective_name, value in record["raw_objectives"].items():
+                        mol.SetProp(objective_name, str(value))
+                    mol.SetProp("cLogP", str(record["clogp"]))
+                    mol.SetProp("cLogP_penalty", str(record["clogp_penalty"]))
                     for key, value in record["targets"][target.name].items():
                         if value is not None:
                             encoded = (
@@ -926,6 +981,7 @@ class BoxDockingObjectives(Objectives):
             "muegge_failed": sum(reason.startswith("Muegge filter") for reason in reasons),
             "brenk_failed": sum(reason.startswith("Brenk filter") for reason in reasons),
             "br_sascore_failed": sum(reason.startswith("BR-SAScore") for reason in reasons),
+            "max_clogp_failed": sum(reason.startswith("cLogP filter") for reason in reasons),
             "lilly_failed": sum(reason.startswith("Lilly Medchem Rules") for reason in reasons),
             "conformer_failed": reasons.count("AMSR conformer construction failed"),
             "all_targets_accepted": sum(
@@ -947,6 +1003,17 @@ class BoxDockingObjectives(Objectives):
             values = [float(record["scores"][objective.name]) for record in accepted]
             row[f"mean_{objective.name}"] = float(np.mean(values)) if values else None
             row[f"best_{objective.name}"] = max(values) if values else None
+        clogp_values = [float(record["clogp"]) for record in accepted]
+        penalty_values = [float(record["clogp_penalty"]) for record in accepted]
+        row["mean_clogp"] = float(np.mean(clogp_values)) if clogp_values else None
+        row["max_clogp"] = max(clogp_values) if clogp_values else None
+        row["mean_clogp_penalty"] = float(np.mean(penalty_values)) if penalty_values else None
+        if self.config.clogp_soft_target is not None:
+            for target in self.config.targets:
+                name = f"gnina_cnn_affinity__{target.name}"
+                values = [float(record["raw_objectives"][name]) for record in accepted]
+                row[f"mean_{name}"] = float(np.mean(values)) if values else None
+                row[f"best_{name}"] = max(values) if values else None
         self._progress.append(row)
         write_header = not self.progress_file.exists()
         with self.progress_file.open("a", newline="") as output:
@@ -968,6 +1035,10 @@ class BoxDockingObjectives(Objectives):
             f"Passed every target gate (latest generation): "
             f"{int(latest['all_targets_accepted']):,}",
             f"Cumulative Pareto-front size: {len(self._overall_front):,}",
+            f"Latest accepted cLogP: mean={float(latest['mean_clogp']):.3f}, "
+            f"max={float(latest['max_clogp']):.3f}"
+            if latest["mean_clogp"] is not None
+            else "Latest accepted cLogP: n/a",
             "",
             "Latest-generation objective scores:",
         ]
@@ -979,6 +1050,17 @@ class BoxDockingObjectives(Objectives):
                 if mean is not None and best is not None
                 else f"  {objective.name}: n/a"
             )
+        if self.config.clogp_soft_target is not None:
+            lines.extend(["", "Latest-generation raw CNNaffinities:"])
+            for target in self.config.targets:
+                name = f"gnina_cnn_affinity__{target.name}"
+                mean = latest[f"mean_{name}"]
+                best = latest[f"best_{name}"]
+                lines.append(
+                    f"  {name}: mean={float(mean):.3f}, best={float(best):.3f}"
+                    if mean is not None and best is not None
+                    else f"  {name}: n/a"
+                )
         output = self.config.output_dir / "summary.txt"
         temporary = output.with_suffix(".txt.tmp")
         temporary.write_text("\n".join(lines) + "\n")

@@ -18,6 +18,26 @@ _CLI_BATCH_SIZE = fast_cli_sampling_batch_size()
 _CLI_CONFORMER_WORKERS = default_conformer_workers(100)
 _CLI_EVALUATION_WORKERS = default_evaluation_workers()
 
+
+def _validate_clogp_options(
+    max_clogp: float | None,
+    clogp_soft_target: float | None,
+    clogp_penalty: float,
+) -> None:
+    if max_clogp is not None and not math.isfinite(max_clogp):
+        raise typer.BadParameter("--max-clogp must be finite")
+    if clogp_soft_target is not None and not math.isfinite(clogp_soft_target):
+        raise typer.BadParameter("--clogp-soft-target must be finite")
+    if not math.isfinite(clogp_penalty) or clogp_penalty < 0:
+        raise typer.BadParameter("--clogp-penalty must be finite and >= 0")
+    if clogp_soft_target is None and clogp_penalty != 0:
+        raise typer.BadParameter("--clogp-penalty requires --clogp-soft-target")
+    if clogp_soft_target is not None and clogp_penalty == 0:
+        raise typer.BadParameter("--clogp-soft-target requires a positive --clogp-penalty")
+    if max_clogp is not None and clogp_soft_target is not None and clogp_soft_target > max_clogp:
+        raise typer.BadParameter("--clogp-soft-target must not exceed --max-clogp")
+
+
 app = typer.Typer(
     help="mtrl: molecular generation with AMSR + trl",
     add_completion=False,
@@ -133,6 +153,21 @@ def score(
         "--max-br-sascore",
         help="Reject molecules above this BR-SAScore (1 is easiest; 10 is hardest)",
     ),
+    max_clogp: float | None = typer.Option(
+        None,
+        "--max-clogp",
+        help="Reject molecules whose RDKit cLogP exceeds this value",
+    ),
+    clogp_soft_target: float | None = typer.Option(
+        None,
+        "--clogp-soft-target",
+        help="Soft cLogP target used to adjust successful CNNaffinity scores",
+    ),
+    clogp_penalty: float = typer.Option(
+        0.0,
+        "--clogp-penalty",
+        help="Quadratic penalty coefficient above --clogp-soft-target",
+    ),
     lilly_medchem_rules: bool = typer.Option(
         False,
         "--lilly-medchem-rules/--no-lilly-medchem-rules",
@@ -176,6 +211,7 @@ def score(
         not math.isfinite(max_br_sascore) or not 1.0 <= max_br_sascore <= 10.0
     ):
         raise typer.BadParameter("--max-br-sascore must be between 1 and 10")
+    _validate_clogp_options(max_clogp, clogp_soft_target, clogp_penalty)
     try:
         targets = load_docking_targets(docking_targets.resolve())
         config = BoxScoringConfig(
@@ -185,6 +221,9 @@ def score(
             muegge_filter=muegge_filter,
             brenk_filter=brenk_filter,
             max_br_sascore=max_br_sascore,
+            max_clogp=max_clogp,
+            clogp_soft_target=clogp_soft_target,
+            clogp_penalty=clogp_penalty,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
             verbose_tools=verbose_tools,
@@ -429,6 +468,27 @@ def rl(
         ),
         rich_help_panel="Molecule gates",
     ),
+    max_clogp: float | None = typer.Option(
+        None,
+        "--max-clogp",
+        help="Reject molecules whose RDKit cLogP exceeds this value before 3D scoring",
+        rich_help_panel="Molecule gates",
+    ),
+    clogp_soft_target: float | None = typer.Option(
+        None,
+        "--clogp-soft-target",
+        help="Box mode: soft cLogP target shared by every CNNaffinity objective",
+        rich_help_panel="Scoring inputs",
+    ),
+    clogp_penalty: float = typer.Option(
+        0.0,
+        "--clogp-penalty",
+        help=(
+            "Box mode: subtract this coefficient times squared cLogP excess "
+            "from every successful CNNaffinity"
+        ),
+        rich_help_panel="Scoring inputs",
+    ),
     muegge_filter: bool = typer.Option(
         False,
         "--muegge-filter/--no-muegge-filter",
@@ -658,6 +718,7 @@ def rl(
         not math.isfinite(max_br_sascore) or not 1.0 <= max_br_sascore <= 10.0
     ):
         raise typer.BadParameter("--max-br-sascore must be between 1 and 10")
+    _validate_clogp_options(max_clogp, clogp_soft_target, clogp_penalty)
     if docking_targets is not None and (receptor_pdb is not None or reference_sdf is not None):
         raise typer.BadParameter(
             "--docking-targets cannot be combined with --receptor-pdb or --reference-sdf"
@@ -666,6 +727,8 @@ def rl(
         raise typer.BadParameter(
             "provide --docking-targets, or provide both --receptor-pdb and --reference-sdf"
         )
+    if docking_targets is None and clogp_soft_target is not None:
+        raise typer.BadParameter("--clogp-soft-target is available only with --docking-targets")
     output_dir = output_dir.resolve()
     rank = int(os.environ.get("RANK", "0"))
     resume_step = 0
@@ -705,6 +768,9 @@ def rl(
             muegge_filter=muegge_filter,
             brenk_filter=brenk_filter,
             max_br_sascore=max_br_sascore,
+            max_clogp=max_clogp,
+            clogp_soft_target=clogp_soft_target,
+            clogp_penalty=clogp_penalty,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
             verbose_tools=verbose_tools,
@@ -728,6 +794,7 @@ def rl(
             muegge_filter=muegge_filter,
             brenk_filter=brenk_filter,
             max_br_sascore=max_br_sascore,
+            max_clogp=max_clogp,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
             verbose_tools=verbose_tools,
@@ -767,6 +834,11 @@ def rl(
                     "muegge_filter": muegge_filter,
                     "brenk_filter": brenk_filter,
                     "max_br_sascore": max_br_sascore,
+                    "max_clogp": max_clogp,
+                    "clogp_soft_target": (
+                        clogp_soft_target if docking_targets is not None else None
+                    ),
+                    "clogp_penalty": clogp_penalty if docking_targets is not None else None,
                     "iterations": iterations,
                     "kl_beta": kl_beta,
                     "kl_reference_checkpoint": str(kl_reference_checkpoint.resolve())
