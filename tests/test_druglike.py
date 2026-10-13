@@ -6,6 +6,7 @@ from mtrl.druglike import (
     druglike_properties,
     druglike_rejection_reason,
     muegge_rejection_reason,
+    pfizer_3_75_rejection_reason,
 )
 
 
@@ -24,6 +25,29 @@ def test_explicit_clogp_gate_can_be_stricter_than_muegge() -> None:
 
     assert clogp_rejection_reason(ibuprofen, 4.0) is None
     assert clogp_rejection_reason(ibuprofen, 3.0).startswith("cLogP filter failed:")
+
+
+def test_pfizer_3_75_gate_rejects_lipophilic_low_polarity_molecule() -> None:
+    molecule = Chem.MolFromSmiles("Cc1cccc(NC(=O)CCc2ccccc2C)c1")
+
+    reason = pfizer_3_75_rejection_reason(molecule)
+
+    assert reason is not None
+    assert reason.startswith("Pfizer 3/75 filter failed:")
+    assert "cLogP" in reason
+    assert "TPSA" in reason
+
+
+def test_pfizer_3_75_gate_accepts_high_clogp_molecule_with_tpsa_above_75() -> None:
+    molecule = Chem.MolFromSmiles("CCCCCc1nc(Cl)c(CO)n1Cc1ccc(-c2ccccc2-c2nn[nH]n2)cc1")
+
+    assert pfizer_3_75_rejection_reason(molecule) is None
+
+
+def test_pfizer_3_75_gate_accepts_low_clogp_molecule_with_tpsa_below_75() -> None:
+    molecule = Chem.MolFromSmiles("CCO")
+
+    assert pfizer_3_75_rejection_reason(molecule) is None
 
 
 def test_greasy_alkane_is_rejected_by_clogp() -> None:

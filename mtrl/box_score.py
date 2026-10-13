@@ -104,6 +104,7 @@ def score_sdf(
             rdkit_druglike=config.rdkit_druglike_filter,
             muegge=config.muegge_filter,
             brenk=config.brenk_filter,
+            pfizer_3_75=config.pfizer_3_75_filter,
             max_br_sascore=config.max_br_sascore,
             max_clogp=config.max_clogp,
         ):

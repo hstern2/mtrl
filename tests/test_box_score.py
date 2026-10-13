@@ -180,6 +180,42 @@ def test_score_sdf_applies_explicit_clogp_gate_before_docking(tmp_path) -> None:
     assert records[0]["rejection_reason"].startswith("cLogP filter failed:")
 
 
+def test_score_sdf_applies_pfizer_3_75_gate_before_docking(tmp_path) -> None:
+    input_sdf = tmp_path / "input.sdf"
+    writer = Chem.SDWriter(str(input_sdf))
+    writer.write(_mol3d_from_smiles("Cc1cccc(NC(=O)CCc2ccccc2C)c1", "greasy"))
+    writer.write(_mol3d_from_smiles("COc1cccc(Nc2nccc(-c3c[nH]nc3-c3cnncn3)n2)c1", "polar"))
+    writer.close()
+    receptor = tmp_path / "receptor.pdb"
+    receptor.write_text("END\n")
+    target = DockingTarget(
+        name="site_a",
+        receptor_pdb=receptor,
+        center=(1.0, 2.0, 3.0),
+        size=(20.0, 20.0, 20.0),
+    )
+    result = BoxDockingScore(
+        targets={
+            "site_a": TargetDockingScore(
+                target_name="site_a", cnn_affinity=6.0, accepted=True, pose=_mol3d()
+            )
+        },
+        accepted=True,
+    )
+    pipeline = FakePipeline(result)
+    config = BoxScoringConfig(
+        targets=(target,), output_dir=tmp_path / "scored", pfizer_3_75_filter=True
+    )
+
+    score_sdf(input_sdf, config, pipeline=pipeline)
+
+    assert [mol.GetProp("_Name") for mol in pipeline.seen] == ["polar"]
+    records = [
+        json.loads(line) for line in (config.output_dir / "scores.jsonl").read_text().splitlines()
+    ]
+    assert records[0]["rejection_reason"].startswith("Pfizer 3/75 filter failed:")
+
+
 def test_score_sdf_applies_muegge_and_brenk_before_docking(tmp_path) -> None:
     input_sdf = tmp_path / "input.sdf"
     writer = Chem.SDWriter(str(input_sdf))

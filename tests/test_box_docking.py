@@ -344,6 +344,7 @@ def test_box_config_round_trips_rigid_refine_mode(tmp_path, monkeypatch) -> None
         rdkit_druglike_filter=True,
         muegge_filter=True,
         brenk_filter=True,
+        pfizer_3_75_filter=True,
         max_br_sascore=5.0,
         max_clogp=4.0,
         posebusters_config="dock-fast",
@@ -359,6 +360,7 @@ def test_box_config_round_trips_rigid_refine_mode(tmp_path, monkeypatch) -> None
     assert restored.rdkit_druglike_filter is True
     assert restored.muegge_filter is True
     assert restored.brenk_filter is True
+    assert restored.pfizer_3_75_filter is True
     assert restored.max_br_sascore == 5.0
     assert restored.max_clogp == 4.0
     assert restored.posebusters_config == "dock-fast"

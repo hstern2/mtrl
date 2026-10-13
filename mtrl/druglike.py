@@ -41,6 +41,19 @@ def clogp_rejection_reason(mol: Mol, maximum: float) -> str | None:
     return f"cLogP filter failed: cLogP {value:g} > {maximum:g}"
 
 
+def pfizer_3_75_rejection_reason(mol: Mol) -> str | None:
+    """Apply the Pfizer 3/75 guideline as a hard molecular gate."""
+    properties = druglike_properties(mol)
+    if not math.isfinite(properties.clogp) or not math.isfinite(properties.tpsa):
+        return "Pfizer 3/75 filter failed: non-finite cLogP or TPSA"
+    if properties.clogp <= 3.0 or properties.tpsa >= 75.0:
+        return None
+    return (
+        "Pfizer 3/75 filter failed: "
+        f"cLogP {properties.clogp:g} > 3 and TPSA {properties.tpsa:g} < 75"
+    )
+
+
 def druglike_rejection_reason(mol: Mol) -> str | None:
     """Return Rule-of-Five/Veber violations, or ``None`` when the molecule passes."""
     properties = druglike_properties(mol)

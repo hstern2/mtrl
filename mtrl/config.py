@@ -133,6 +133,7 @@ class ScoringConfig:
     evaluation_workers: int = 1
     muegge_filter: bool = False
     brenk_filter: bool = False
+    pfizer_3_75_filter: bool = False
     max_clogp: float | None = None
 
     def validate(self) -> None:
@@ -196,6 +197,7 @@ class BoxScoringConfig:
     posebusters_timeout_seconds: int = 600
     muegge_filter: bool = False
     brenk_filter: bool = False
+    pfizer_3_75_filter: bool = False
     max_clogp: float | None = None
 
     def validate(self) -> None:
@@ -231,6 +233,7 @@ class BoxScoringConfig:
             "rdkit_druglike_filter": self.rdkit_druglike_filter,
             "muegge_filter": self.muegge_filter,
             "brenk_filter": self.brenk_filter,
+            "pfizer_3_75_filter": self.pfizer_3_75_filter,
             "max_br_sascore": self.max_br_sascore,
             "max_clogp": self.max_clogp,
             "lilly_medchem_rules": self.lilly_medchem_rules,

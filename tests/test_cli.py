@@ -305,6 +305,7 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
             "--rdkit-druglike-filter",
             "--muegge-filter",
             "--brenk-filter",
+            "--pfizer-3-75-filter",
             "--max-br-sascore",
             "5",
             "--max-clogp",
@@ -340,6 +341,7 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
     assert scoring_config["rdkit_druglike_filter"] is True
     assert scoring_config["muegge_filter"] is True
     assert scoring_config["brenk_filter"] is True
+    assert scoring_config["pfizer_3_75_filter"] is True
     assert scoring_config["max_br_sascore"] == 5.0
     assert scoring_config["max_clogp"] == 4.0
     assert scoring_config["target_failure_score"] == -1.5
@@ -353,6 +355,7 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
     assert run_config["rdkit_druglike_filter"] is True
     assert run_config["muegge_filter"] is True
     assert run_config["brenk_filter"] is True
+    assert run_config["pfizer_3_75_filter"] is True
     assert run_config["max_br_sascore"] == 5.0
     assert run_config["max_clogp"] == 4.0
     assert "N-dimensional Pareto" in run_config["reward"]
@@ -438,6 +441,7 @@ def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -
             "--rdkit-druglike-filter",
             "--muegge-filter",
             "--brenk-filter",
+            "--pfizer-3-75-filter",
             "--max-br-sascore",
             "5",
             "--max-clogp",
@@ -459,6 +463,7 @@ def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -
     assert received["config"].rdkit_druglike_filter is True
     assert received["config"].muegge_filter is True
     assert received["config"].brenk_filter is True
+    assert received["config"].pfizer_3_75_filter is True
     assert received["config"].max_br_sascore == 5.0
     assert received["config"].max_clogp == 4.0
     assert '"retained_molecules": 1' in result.stdout

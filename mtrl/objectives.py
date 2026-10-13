@@ -50,6 +50,7 @@ def _screen_candidates(
     rdkit_druglike_filter: bool,
     muegge_filter: bool,
     brenk_filter: bool,
+    pfizer_3_75_filter: bool,
     max_br_sascore: float | None,
     max_clogp: float | None,
     lilly_filter: LillyMedchemFilter | None,
@@ -71,6 +72,7 @@ def _screen_candidates(
             rdkit_druglike=rdkit_druglike_filter,
             muegge=muegge_filter,
             brenk=brenk_filter,
+            pfizer_3_75=pfizer_3_75_filter,
             max_br_sascore=max_br_sascore,
             max_clogp=max_clogp,
         ):
@@ -249,6 +251,7 @@ class DockingObjectives(Objectives):
             self.config.rdkit_druglike_filter,
             self.config.muegge_filter,
             self.config.brenk_filter,
+            self.config.pfizer_3_75_filter,
             self.config.max_br_sascore,
             self.config.max_clogp,
             self.lilly_filter,
@@ -569,6 +572,9 @@ class DockingObjectives(Objectives):
             ),
             "muegge_failed": sum(reason.startswith("Muegge filter") for reason in reasons),
             "brenk_failed": sum(reason.startswith("Brenk filter") for reason in reasons),
+            "pfizer_3_75_failed": sum(
+                reason.startswith("Pfizer 3/75 filter") for reason in reasons
+            ),
             "br_sascore_failed": sum(reason.startswith("BR-SAScore") for reason in reasons),
             "lilly_failed": sum(reason.startswith("Lilly Medchem Rules") for reason in reasons),
             "conformer_failed": reasons.count("AMSR conformer construction failed"),
@@ -580,6 +586,7 @@ class DockingObjectives(Objectives):
                     or reason.startswith("RDKit drug-likeness")
                     or reason.startswith("Muegge filter")
                     or reason.startswith("Brenk filter")
+                    or reason.startswith("Pfizer 3/75 filter")
                     or reason.startswith("BR-SAScore")
                     or reason.startswith("Lilly Medchem Rules")
                     or reason == "AMSR conformer construction failed"
@@ -699,6 +706,7 @@ class BoxDockingObjectives(Objectives):
             self.config.rdkit_druglike_filter,
             self.config.muegge_filter,
             self.config.brenk_filter,
+            self.config.pfizer_3_75_filter,
             self.config.max_br_sascore,
             self.config.max_clogp,
             self.lilly_filter,
@@ -929,6 +937,9 @@ class BoxDockingObjectives(Objectives):
             ),
             "muegge_failed": sum(reason.startswith("Muegge filter") for reason in reasons),
             "brenk_failed": sum(reason.startswith("Brenk filter") for reason in reasons),
+            "pfizer_3_75_failed": sum(
+                reason.startswith("Pfizer 3/75 filter") for reason in reasons
+            ),
             "br_sascore_failed": sum(reason.startswith("BR-SAScore") for reason in reasons),
             "max_clogp_failed": sum(reason.startswith("cLogP filter") for reason in reasons),
             "lilly_failed": sum(reason.startswith("Lilly Medchem Rules") for reason in reasons),

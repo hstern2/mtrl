@@ -123,6 +123,7 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl score molecules.sdf \
   --rdkit-druglike-filter \
   --muegge-filter \
   --brenk-filter \
+  --pfizer-3-75-filter \
   --max-br-sascore 5 \
   --max-clogp 4 \
   --target-failure-score 0 \
@@ -139,6 +140,7 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
   --rdkit-druglike-filter \
   --muegge-filter \
   --brenk-filter \
+  --pfizer-3-75-filter \
   --max-br-sascore 5 \
   --max-clogp 4 \
   --target-failure-score 0 \
@@ -157,6 +159,10 @@ the minimum functionality requirement of more than one heteroatom.
 `--brenk-filter` rejects structures matching RDKit's built-in
 [Brenk alert catalog](https://doi.org/10.1002/cmdc.200700139), including long
 aliphatic chains and other undesirable motifs.
+`--pfizer-3-75-filter` applies the published
+[Pfizer 3/75 guideline](https://doi.org/10.1016/j.bmcl.2008.07.071) as a hard
+gate: it rejects a molecule when RDKit cLogP is greater than 3 and TPSA is less
+than 75 Å².
 `--max-br-sascore 5` applies the published USPTO/eMolecules BR-SAScore, on which
 1 is easiest and 10 is hardest. Lilly Medchem Rules remains an independent
 structural-alert gate. `--max-clogp 4` independently rejects molecules whose

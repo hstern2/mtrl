@@ -44,6 +44,7 @@ def _config(
     rdkit_druglike: bool = False,
     muegge: bool = False,
     brenk: bool = False,
+    pfizer_3_75: bool = False,
     max_br_sascore: float | None = None,
 ) -> ScoringConfig:
     return ScoringConfig(
@@ -53,6 +54,7 @@ def _config(
         rdkit_druglike_filter=rdkit_druglike,
         muegge_filter=muegge,
         brenk_filter=brenk,
+        pfizer_3_75_filter=pfizer_3_75,
         max_br_sascore=max_br_sascore,
         lilly_medchem_rules=lilly,
     )
@@ -249,6 +251,34 @@ def test_br_sascore_filter_runs_before_lilly_and_structure_scoring(tmp_path) -> 
     assert scored[1].valid
     assert lilly.seen == [decoded[1].mol]
     assert pipeline.seen == [decoded[1].mol]
+
+
+def test_pfizer_3_75_filter_runs_before_structure_scoring(tmp_path) -> None:
+    rejected = _decoded("Cc1cccc(NC(=O)CCc2ccccc2C)c1")
+    accepted = _decoded("COc1cccc(Nc2nccc(-c3c[nH]nc3-c3cnncn3)n2)c1")
+    pipeline = FakePipeline(
+        [
+            StructureScore(
+                cnn_affinity=6.0,
+                roshambo_tanimoto_combo=0.5,
+                minimized_rmsd=0.2,
+                accepted=True,
+            )
+        ]
+    )
+    suite = DockingObjectives(
+        _config(tmp_path, pfizer_3_75=True),
+        decode_fn=lambda tokens: [rejected, accepted][int(tokens[0])],
+        conformer_fn=lambda candidate: candidate.mol,
+        pipeline=pipeline,
+    )
+
+    scored = suite.evaluate([["0"], ["1"]])
+
+    assert not scored[0].valid
+    assert scored[0].rejection_reason.startswith("Pfizer 3/75 filter failed:")
+    assert scored[1].valid
+    assert pipeline.seen == [accepted.mol]
 
 
 @pytest.mark.parametrize("filter_name", ["muegge", "brenk"])

@@ -51,12 +51,12 @@ def test_run_summary_reports_cumulative_filters_and_scores(tmp_path) -> None:
     (tmp_path / "progress.csv").write_text(
         "generation,generated,cumulative_generated,accepted,accepted_percent,"
         "cumulative_accepted,decode_failed,disconnected_failed,rdkit_druglike_failed,"
-        "muegge_failed,brenk_failed,br_sascore_failed,lilly_failed,"
+        "muegge_failed,brenk_failed,pfizer_3_75_failed,br_sascore_failed,lilly_failed,"
         "conformer_failed,posebusters_failed,scoring_failed,mean_cnn_affinity,"
         "best_cnn_affinity,mean_tanimoto_combo,best_tanimoto_combo,"
         "reference_cnn_affinity\n"
-        "1,10,10,5,50,5,1,0,1,1,2,1,2,0,1,1,4.0,6.0,0.4,0.6,7.0\n"
-        "2,10,20,8,80,13,0,1,2,2,1,2,0,0,1,0,5.0,6.5,0.5,0.7,7.0\n"
+        "1,10,10,5,50,5,1,0,1,1,2,3,1,2,0,1,1,4.0,6.0,0.4,0.6,7.0\n"
+        "2,10,20,8,80,13,0,1,2,2,1,1,2,0,0,1,0,5.0,6.5,0.5,0.7,7.0\n"
     )
 
     output = write_run_summary(tmp_path)
@@ -70,6 +70,7 @@ def test_run_summary_reports_cumulative_filters_and_scores(tmp_path) -> None:
     assert "RDKit drug-likeness: 3 (15.00%)" in summary
     assert "Muegge filter: 3 (15.00%)" in summary
     assert "Brenk filter: 3 (15.00%)" in summary
+    assert "Pfizer 3/75 filter: 4 (20.00%)" in summary
     assert "BR-SAScore: 3 (15.00%)" in summary
     assert "Lilly Medchem Rules (-relaxed): 2 (10.00%)" in summary
     assert "PoseBusters: 2 (10.00%)" in summary
