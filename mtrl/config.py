@@ -199,6 +199,7 @@ class BoxScoringConfig:
     brenk_filter: bool = False
     pfizer_3_75_filter: bool = False
     max_clogp: float | None = None
+    max_conformers_per_molecule: int | None = None
 
     def validate(self) -> None:
         if not self.targets:
@@ -212,6 +213,13 @@ class BoxScoringConfig:
             raise ValueError("evaluation_workers must be > 0")
         _validate_max_br_sascore(self.max_br_sascore)
         _validate_max_clogp(self.max_clogp)
+        conformer_limit = self.max_conformers_per_molecule
+        if conformer_limit is not None and (
+            isinstance(conformer_limit, bool)
+            or not isinstance(conformer_limit, int)
+            or conformer_limit <= 0
+        ):
+            raise ValueError("max_conformers_per_molecule must be a positive integer")
         if not math.isfinite(self.target_failure_score):
             raise ValueError("target_failure_score must be finite")
         if self.accept_targets not in {"any", "all"}:
@@ -236,6 +244,7 @@ class BoxScoringConfig:
             "pfizer_3_75_filter": self.pfizer_3_75_filter,
             "max_br_sascore": self.max_br_sascore,
             "max_clogp": self.max_clogp,
+            "max_conformers_per_molecule": self.max_conformers_per_molecule,
             "lilly_medchem_rules": self.lilly_medchem_rules,
             "lilly_rules_executable": self.lilly_rules_executable,
             "verbose_tools": self.verbose_tools,

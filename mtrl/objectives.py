@@ -3,6 +3,7 @@ from __future__ import annotations
 import atexit
 import json
 import os
+from collections import Counter
 from collections.abc import Callable
 from csv import DictWriter
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ import numpy as np
 import torch
 from rdkit import Chem
 from rdkit.Chem import QED, Mol
+from rdkit.Chem.Scaffolds import MurckoScaffold
 from trl.objectives.base import Objective, Objectives, ScoredItem
 from trl.objectives.pareto import nsga2_sort
 
@@ -137,6 +139,51 @@ def _evaluate_candidates(
             conformers.append(conformer)
     results = pipeline.score_batch(conformers) if conformers else []
     return scored_indices, conformers, results
+
+
+def _limit_conformers_per_molecule(
+    token_sequences: list[list[str]],
+    candidate_indices: list[int],
+    candidates: list[DecodedAMSR],
+    items: list[ScoredItem],
+    limit: int | None,
+) -> tuple[list[int], list[DecodedAMSR]]:
+    """Keep a bounded number of distinct emitted conformers for each molecule."""
+    if limit is None:
+        return candidate_indices, candidates
+
+    retained_indices = []
+    retained_candidates = []
+    conformers_seen: dict[str, set[str]] = {}
+    retained_counts: dict[str, int] = {}
+    for index, candidate in zip(candidate_indices, candidates, strict=True):
+        molecule_key = Chem.MolToSmiles(candidate.mol, isomericSmiles=True)
+        items[index].group_key = molecule_key
+        conformer_key = "".join(token_sequences[index])
+        molecule_conformers = conformers_seen.setdefault(molecule_key, set())
+        if conformer_key in molecule_conformers:
+            items[index].valid = False
+            items[index].rejection_reason = "duplicate molecular conformer"
+            continue
+        molecule_conformers.add(conformer_key)
+        if retained_counts.get(molecule_key, 0) >= limit:
+            items[index].valid = False
+            items[index].rejection_reason = "molecule conformer limit exceeded"
+            continue
+        retained_counts[molecule_key] = retained_counts.get(molecule_key, 0) + 1
+        retained_indices.append(index)
+        retained_candidates.append(candidate)
+    return retained_indices, retained_candidates
+
+
+def _murcko_scaffold(smiles: str) -> str:
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return "<invalid>"
+    scaffold = MurckoScaffold.GetScaffoldForMol(mol)
+    if scaffold.GetNumAtoms() == 0:
+        return "<acyclic>"
+    return Chem.MolToSmiles(scaffold, isomericSmiles=True)
 
 
 def _append_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
@@ -711,6 +758,13 @@ class BoxDockingObjectives(Objectives):
             self.config.max_clogp,
             self.lilly_filter,
         )
+        candidate_indices, candidates = _limit_conformers_per_molecule(
+            token_sequences,
+            candidate_indices,
+            candidates,
+            items,
+            self.config.max_conformers_per_molecule,
+        )
         diagnostics: list[BoxDockingScore | None] = [None] * len(decoded)
         conformer_indices, _, results = _evaluate_candidates(
             candidate_indices,
@@ -763,6 +817,51 @@ class BoxDockingObjectives(Objectives):
             self._write_progress(score_records, accepted_records)
         self.generation += 1
         return items
+
+    def get_rewards(self, scored: list[ScoredItem]) -> np.ndarray:
+        """Pareto-rank molecules and bound each molecule's total reward.
+
+        Grouping is opt-in through ``max_conformers_per_molecule``. Each
+        objective uses the best score obtained by any retained conformer, while
+        the molecule reward is divided among conformers that supplied at least
+        one of those best scores.
+        """
+        if self.config.max_conformers_per_molecule is None:
+            return super().get_rewards(scored)
+
+        groups: dict[tuple[str, str | int], list[int]] = {}
+        for index, item in enumerate(scored):
+            if not item.valid:
+                continue
+            key: tuple[str, str | int] = (
+                ("molecule", item.group_key) if item.group_key is not None else ("item", index)
+            )
+            groups.setdefault(key, []).append(index)
+
+        representatives = []
+        contributors_by_group: list[list[int]] = []
+        grouped_indices = list(groups.values())
+        for indices in grouped_indices:
+            aggregate_scores = {}
+            contributor_indices: set[int] = set()
+            for objective in self.objectives:
+                values = [float(scored[index].scores[objective.name]) for index in indices]
+                best = max(values) if objective.direction == "maximize" else min(values)
+                aggregate_scores[objective.name] = best
+                contributor_indices.update(
+                    index
+                    for index, value in zip(indices, values, strict=True)
+                    if np.isclose(value, best, rtol=1e-12, atol=1e-12)
+                )
+            representatives.append(ScoredItem(token_ids=[], scores=aggregate_scores))
+            contributors_by_group.append(sorted(contributor_indices))
+
+        molecule_rewards = super().get_rewards(representatives)
+        rewards = np.zeros(len(scored), dtype=float)
+        for indices, reward in zip(contributors_by_group, molecule_rewards, strict=True):
+            share = float(reward) / len(indices)
+            rewards[indices] = share
+        return rewards
 
     def _score_records(
         self,
@@ -835,6 +934,7 @@ class BoxDockingObjectives(Objectives):
     def _pareto_front(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not records:
             return []
+        records = self._aggregate_molecule_records(records)
         objective_names = [objective.name for objective in self.objectives]
         directions = [
             1.0 if objective.direction == "maximize" else -1.0 for objective in self.objectives
@@ -851,12 +951,18 @@ class BoxDockingObjectives(Objectives):
         )
         fronts, _ = nsga2_sort(scores)
         front = [records[index] for index in fronts[0]]
-        unique = {
-            (record["amsr"], *(record["scores"][name] for name in objective_names)): record
-            for record in front
-        }
+        if self.config.max_conformers_per_molecule is None:
+            front = list(
+                {
+                    (
+                        record["amsr"],
+                        *(record["scores"][name] for name in objective_names),
+                    ): record
+                    for record in front
+                }.values()
+            )
         return sorted(
-            unique.values(),
+            front,
             key=lambda record: (
                 *(
                     -record["scores"][name] * direction
@@ -865,6 +971,61 @@ class BoxDockingObjectives(Objectives):
                 record["amsr"],
             ),
         )
+
+    def _aggregate_molecule_records(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if self.config.max_conformers_per_molecule is None:
+            return records
+
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for record in records:
+            grouped.setdefault(str(record["smiles"]), []).append(record)
+
+        objective_by_name = {objective.name: objective for objective in self.objectives}
+        aggregated = []
+        for molecule_records in grouped.values():
+            first = molecule_records[0]
+            record = dict(first)
+            record["scores"] = {}
+            for name, objective in objective_by_name.items():
+                values = [float(item["scores"][name]) for item in molecule_records]
+                record["scores"][name] = (
+                    max(values) if objective.direction == "maximize" else min(values)
+                )
+
+            record["conformer_count"] = sum(
+                int(item.get("conformer_count", 1)) for item in molecule_records
+            )
+            record["pose_blocks"] = {}
+            record["targets"] = {}
+            record["pose_amsrs"] = {}
+            for target in self.config.targets:
+                objective_name = f"gnina_cnn_affinity__{target.name}"
+                pose_records = [
+                    item for item in molecule_records if target.name in item["pose_blocks"]
+                ]
+                if pose_records:
+                    winner = max(
+                        pose_records,
+                        key=lambda item: float(item["scores"][objective_name]),
+                    )
+                    record["pose_blocks"][target.name] = winner["pose_blocks"][target.name]
+                    record["targets"][target.name] = winner["targets"][target.name]
+                    record["pose_amsrs"][target.name] = winner.get("pose_amsrs", {}).get(
+                        target.name, winner["amsr"]
+                    )
+                else:
+                    diagnostic = next(
+                        (
+                            item["targets"][target.name]
+                            for item in molecule_records
+                            if target.name in item["targets"]
+                        ),
+                        None,
+                    )
+                    if diagnostic is not None:
+                        record["targets"][target.name] = diagnostic
+            aggregated.append(record)
+        return aggregated
 
     def _write_outputs(self, accepted: list[dict[str, Any]]) -> None:
         if accepted:
@@ -899,9 +1060,14 @@ class BoxDockingObjectives(Objectives):
                     if mol is None:
                         continue
                     mol.SetProp("_Name", record["name"])
-                    mol.SetProp("AMSR", record["amsr"])
+                    mol.SetProp(
+                        "AMSR",
+                        record.get("pose_amsrs", {}).get(target.name, record["amsr"]),
+                    )
                     mol.SetProp("SMILES", record["smiles"])
                     mol.SetProp("docking_target", target.name)
+                    if "conformer_count" in record:
+                        mol.SetProp("evaluated_conformer_count", str(record["conformer_count"]))
                     for objective_name, value in record["scores"].items():
                         mol.SetProp(objective_name, str(value))
                     for key, value in record["targets"][target.name].items():
@@ -923,6 +1089,16 @@ class BoxDockingObjectives(Objectives):
         prior_generated = int(self._progress[-1]["cumulative_generated"]) if self._progress else 0
         prior_accepted = int(self._progress[-1]["cumulative_accepted"]) if self._progress else 0
         reasons = [record["rejection_reason"] for record in score_records if not record["accepted"]]
+        decoded_counts = Counter(
+            str(record["smiles"]) for record in score_records if record["smiles"] is not None
+        )
+        decoded_scaffolds: Counter[str] = Counter()
+        for smiles, count in decoded_counts.items():
+            decoded_scaffolds[_murcko_scaffold(smiles)] += count
+        molecule_counts = Counter(str(record["smiles"]) for record in accepted)
+        scaffold_counts: Counter[str] = Counter()
+        for smiles, count in molecule_counts.items():
+            scaffold_counts[_murcko_scaffold(smiles)] += count
         row: dict[str, Any] = {
             "generation": self.generation,
             "generated": len(score_records),
@@ -930,6 +1106,26 @@ class BoxDockingObjectives(Objectives):
             "accepted": len(accepted),
             "accepted_percent": 100.0 * len(accepted) / max(1, len(score_records)),
             "cumulative_accepted": prior_accepted + len(accepted),
+            "unique_decoded_molecules": len(decoded_counts),
+            "unique_decoded_scaffolds": len(decoded_scaffolds),
+            "dominant_decoded_molecule_percent": (
+                100.0 * max(decoded_counts.values()) / sum(decoded_counts.values())
+                if decoded_counts
+                else 0.0
+            ),
+            "dominant_decoded_scaffold_percent": (
+                100.0 * max(decoded_scaffolds.values()) / sum(decoded_scaffolds.values())
+                if decoded_scaffolds
+                else 0.0
+            ),
+            "unique_accepted_molecules": len(molecule_counts),
+            "unique_accepted_scaffolds": len(scaffold_counts),
+            "dominant_molecule_percent": (
+                100.0 * max(molecule_counts.values()) / len(accepted) if accepted else 0.0
+            ),
+            "dominant_scaffold_percent": (
+                100.0 * max(scaffold_counts.values()) / len(accepted) if accepted else 0.0
+            ),
             "decode_failed": reasons.count("AMSR decode failed"),
             "disconnected_failed": reasons.count("molecule is disconnected"),
             "rdkit_druglike_failed": sum(
@@ -943,6 +1139,8 @@ class BoxDockingObjectives(Objectives):
             "br_sascore_failed": sum(reason.startswith("BR-SAScore") for reason in reasons),
             "max_clogp_failed": sum(reason.startswith("cLogP filter") for reason in reasons),
             "lilly_failed": sum(reason.startswith("Lilly Medchem Rules") for reason in reasons),
+            "duplicate_conformer": reasons.count("duplicate molecular conformer"),
+            "conformer_limit_exceeded": reasons.count("molecule conformer limit exceeded"),
             "conformer_failed": reasons.count("AMSR conformer construction failed"),
             "all_targets_accepted": sum(
                 record["accepted"]
@@ -981,6 +1179,22 @@ class BoxDockingObjectives(Objectives):
             f"Strings generated: {int(latest['cumulative_generated']):,}",
             f"Target acceptance policy: {self.config.accept_targets}",
             f"Accepted by target policy: {int(latest['cumulative_accepted']):,}",
+            f"Unique decoded molecules (latest generation): "
+            f"{int(latest['unique_decoded_molecules']):,}",
+            f"Unique decoded scaffolds (latest generation): "
+            f"{int(latest['unique_decoded_scaffolds']):,}",
+            f"Largest decoded-molecule share (latest generation): "
+            f"{float(latest['dominant_decoded_molecule_percent']):.1f}%",
+            f"Largest decoded-scaffold share (latest generation): "
+            f"{float(latest['dominant_decoded_scaffold_percent']):.1f}%",
+            f"Unique accepted molecules (latest generation): "
+            f"{int(latest['unique_accepted_molecules']):,}",
+            f"Unique accepted scaffolds (latest generation): "
+            f"{int(latest['unique_accepted_scaffolds']):,}",
+            f"Largest molecule share (latest generation): "
+            f"{float(latest['dominant_molecule_percent']):.1f}%",
+            f"Largest scaffold share (latest generation): "
+            f"{float(latest['dominant_scaffold_percent']):.1f}%",
             f"Passed every target gate (latest generation): "
             f"{int(latest['all_targets_accepted']):,}",
             f"Cumulative Pareto-front size: {len(self._overall_front):,}",

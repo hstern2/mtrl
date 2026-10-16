@@ -425,6 +425,15 @@ def rl(
         help="Box mode: add RDKit QED as an independent Pareto objective",
         rich_help_panel="Scoring inputs",
     ),
+    max_conformers_per_molecule: int | None = typer.Option(
+        None,
+        "--max-conformers-per-molecule",
+        help=(
+            "Box RL: dock at most this many distinct generated conformers of each "
+            "canonical molecule per process and balance reward by molecule"
+        ),
+        rich_help_panel="RL training",
+    ),
     evaluation_workers: int = typer.Option(
         _CLI_EVALUATION_WORKERS,
         "--evaluation-workers",
@@ -686,6 +695,8 @@ def rl(
         raise typer.BadParameter("--max-br-sascore must be between 1 and 10")
     if max_clogp is not None and not math.isfinite(max_clogp):
         raise typer.BadParameter("--max-clogp must be finite")
+    if max_conformers_per_molecule is not None and max_conformers_per_molecule <= 0:
+        raise typer.BadParameter("--max-conformers-per-molecule must be > 0")
     if docking_targets is not None and (receptor_pdb is not None or reference_sdf is not None):
         raise typer.BadParameter(
             "--docking-targets cannot be combined with --receptor-pdb or --reference-sdf"
@@ -693,6 +704,10 @@ def rl(
     if docking_targets is None and (receptor_pdb is None or reference_sdf is None):
         raise typer.BadParameter(
             "provide --docking-targets, or provide both --receptor-pdb and --reference-sdf"
+        )
+    if docking_targets is None and max_conformers_per_molecule is not None:
+        raise typer.BadParameter(
+            "--max-conformers-per-molecule currently requires --docking-targets"
         )
     output_dir = output_dir.resolve()
     rank = int(os.environ.get("RANK", "0"))
@@ -746,8 +761,13 @@ def rl(
             qed_objective=qed_objective,
             posebusters_config=cast(PoseBustersConfig, posebusters_config),
             posebusters_timeout_seconds=posebusters_timeout_seconds,
+            max_conformers_per_molecule=max_conformers_per_molecule,
         )
-        reward_description = "global-batch N-dimensional Pareto rank and crowding distance"
+        reward_description = (
+            "molecule-balanced global-batch N-dimensional Pareto rank and crowding distance"
+            if max_conformers_per_molecule is not None
+            else "global-batch N-dimensional Pareto rank and crowding distance"
+        )
     else:
         assert receptor_pdb is not None and reference_sdf is not None
         config = ScoringConfig(
@@ -801,6 +821,9 @@ def rl(
                     "pfizer_3_75_filter": pfizer_3_75_filter,
                     "max_br_sascore": max_br_sascore,
                     "max_clogp": max_clogp,
+                    "max_conformers_per_molecule": (
+                        max_conformers_per_molecule if docking_targets is not None else None
+                    ),
                     "iterations": iterations,
                     "kl_beta": kl_beta,
                     "kl_reference_checkpoint": str(kl_reference_checkpoint.resolve())

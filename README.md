@@ -143,6 +143,7 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
   --pfizer-3-75-filter \
   --max-br-sascore 5 \
   --max-clogp 4 \
+  --max-conformers-per-molecule 3 \
   --target-failure-score 0 \
   --accept-targets any \
   --lilly-medchem-rules \
@@ -175,6 +176,19 @@ passing pose. Targets without a passing pose get the configurable failure score
 written as one SDF per target under each generation and cumulative-front
 directory. The reference-aligned minimization workflow above remains available
 unchanged.
+
+For RL, `--max-conformers-per-molecule N` groups candidates by canonical
+isomeric SMILES and docks at most `N` distinct emitted AMSR conformers of each
+molecule per RL process. Pareto ranking then operates on unique molecules,
+using the best retained conformer for each objective. Each molecule receives
+one reward budget, divided only among conformers that supplied at least one of
+its best objective values. Thus repeated conformers cannot multiply a
+molecule's training influence, while conformer-specific docking information is
+retained. Cumulative Pareto outputs contain one record per canonical molecule;
+each target SDF contains the conformer and pose that supplied that target's
+score. Omitting the option preserves the original conformer-level behavior.
+Progress reports include unique-molecule and Bemis–Murcko scaffold counts and
+the largest molecule and scaffold shares, both before and after scoring gates.
 
 `mtrl score` applies the same target loading, molecule filters, full docking,
 PoseBusters checks, target acceptance policy, and failed-target score without

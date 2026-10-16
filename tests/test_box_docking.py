@@ -347,6 +347,7 @@ def test_box_config_round_trips_rigid_refine_mode(tmp_path, monkeypatch) -> None
         pfizer_3_75_filter=True,
         max_br_sascore=5.0,
         max_clogp=4.0,
+        max_conformers_per_molecule=3,
         posebusters_config="dock-fast",
         posebusters_timeout_seconds=123,
     )
@@ -363,6 +364,7 @@ def test_box_config_round_trips_rigid_refine_mode(tmp_path, monkeypatch) -> None
     assert restored.pfizer_3_75_filter is True
     assert restored.max_br_sascore == 5.0
     assert restored.max_clogp == 4.0
+    assert restored.max_conformers_per_molecule == 3
     assert restored.posebusters_config == "dock-fast"
     assert restored.posebusters_timeout_seconds == 123
     assert restored.targets == config.targets
@@ -388,6 +390,18 @@ def test_box_config_rejects_nonfinite_clogp_cutoff(tmp_path) -> None:
     )
 
     with pytest.raises(ValueError, match="max_clogp must be finite"):
+        config.validate()
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5])
+def test_box_config_rejects_invalid_conformer_limit(tmp_path, limit) -> None:
+    config = BoxScoringConfig(
+        targets=(_targets(tmp_path)[0],),
+        output_dir=tmp_path / "out",
+        max_conformers_per_molecule=limit,
+    )
+
+    with pytest.raises(ValueError, match="must be a positive integer"):
         config.validate()
 
 
@@ -569,6 +583,122 @@ def test_box_rewards_use_all_target_affinities_as_pareto_axes(tmp_path) -> None:
     rewards = suite.get_rewards(scored)
 
     assert all(rewards[index] > rewards[3] for index in range(3))
+
+
+def test_box_objectives_limit_distinct_conformers_before_scoring(tmp_path) -> None:
+    targets = _targets(tmp_path)
+    pose = _mol3d()
+    result = BoxDockingScore(
+        targets={
+            target.name: TargetDockingScore(
+                target_name=target.name,
+                cnn_affinity=6.0,
+                accepted=True,
+                pose=Chem.Mol(pose),
+            )
+            for target in targets
+        },
+        accepted=True,
+    )
+    pipeline = FakeBoxPipeline(result)
+    decoded = DecodedAMSR(Chem.MolFromSmiles("CCO"), {})
+    suite = BoxDockingObjectives(
+        BoxScoringConfig(
+            targets=targets,
+            output_dir=tmp_path / "out",
+            max_conformers_per_molecule=2,
+        ),
+        decode_fn=lambda _: decoded,
+        conformer_fn=lambda _: pose,
+        pipeline=pipeline,
+    )
+
+    scored = suite.evaluate([["a"], ["a"], ["b"], ["c"]])
+
+    assert len(pipeline.seen) == 2
+    assert [item.valid for item in scored] == [True, False, True, False]
+    assert scored[1].rejection_reason == "duplicate molecular conformer"
+    assert scored[3].rejection_reason == "molecule conformer limit exceeded"
+    assert {item.group_key for item in scored} == {"CCO"}
+
+
+def test_box_rewards_are_aggregated_and_balanced_by_molecule(tmp_path) -> None:
+    targets = _targets(tmp_path)
+    grouped_suite = BoxDockingObjectives(
+        BoxScoringConfig(
+            targets=targets,
+            output_dir=tmp_path / "grouped",
+            max_conformers_per_molecule=3,
+        ),
+        pipeline=FakeBoxPipeline(BoxDockingScore()),
+    )
+    ordinary_suite = BoxDockingObjectives(
+        BoxScoringConfig(targets=targets, output_dir=tmp_path / "ordinary"),
+        pipeline=FakeBoxPipeline(BoxDockingScore()),
+    )
+    names = [objective.name for objective in grouped_suite.objectives]
+    first_scores = dict(zip(names, (8.0, 2.0, 2.0), strict=True))
+    second_scores = dict(zip(names, (2.0, 8.0, 2.0), strict=True))
+    other_scores = dict(zip(names, (2.0, 2.0, 8.0), strict=True))
+    scored = [
+        ScoredItem(token_ids=[], scores=first_scores, group_key="molecule-a"),
+        ScoredItem(token_ids=[], scores=second_scores, group_key="molecule-a"),
+        ScoredItem(token_ids=[], scores=other_scores, group_key="molecule-b"),
+    ]
+    expected = ordinary_suite.get_rewards(
+        [
+            ScoredItem(
+                token_ids=[],
+                scores=dict(zip(names, (8.0, 8.0, 2.0), strict=True)),
+            ),
+            ScoredItem(token_ids=[], scores=other_scores),
+        ]
+    )
+
+    rewards = grouped_suite.get_rewards(scored)
+
+    assert rewards[0] == pytest.approx(rewards[1])
+    assert rewards[0] + rewards[1] == pytest.approx(expected[0])
+    assert rewards[2] == pytest.approx(expected[1])
+
+
+def test_molecule_pareto_record_keeps_each_targets_best_conformer(tmp_path) -> None:
+    targets = _targets(tmp_path)
+    suite = BoxDockingObjectives(
+        BoxScoringConfig(
+            targets=targets,
+            output_dir=tmp_path / "out",
+            max_conformers_per_molecule=2,
+        ),
+        pipeline=FakeBoxPipeline(BoxDockingScore()),
+    )
+    names = [objective.name for objective in suite.objectives]
+
+    def record(amsr, values):
+        return {
+            "name": amsr,
+            "amsr": amsr,
+            "smiles": "CCO",
+            "scores": dict(zip(names, values, strict=True)),
+            "targets": {target.name: {"accepted": True} for target in targets},
+            "pose_blocks": {target.name: f"{amsr}-{target.name}" for target in targets},
+        }
+
+    front = suite._pareto_front(
+        [
+            record("conformer-a", (8.0, 2.0, 4.0)),
+            record("conformer-b", (7.0, 9.0, 3.0)),
+        ]
+    )
+
+    assert len(front) == 1
+    assert [front[0]["scores"][name] for name in names] == [8.0, 9.0, 4.0]
+    assert front[0]["pose_amsrs"] == {
+        "q_open": "conformer-a",
+        "c_open": "conformer-b",
+        "r_open": "conformer-a",
+    }
+    assert front[0]["conformer_count"] == 2
 
 
 def test_qed_is_an_optional_independent_box_objective(tmp_path) -> None:

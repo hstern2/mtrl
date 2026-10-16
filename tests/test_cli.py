@@ -310,6 +310,8 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
             "5",
             "--max-clogp",
             "4",
+            "--max-conformers-per-molecule",
+            "3",
             "--target-failure-score",
             "-1.5",
             "--accept-targets",
@@ -344,6 +346,7 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
     assert scoring_config["pfizer_3_75_filter"] is True
     assert scoring_config["max_br_sascore"] == 5.0
     assert scoring_config["max_clogp"] == 4.0
+    assert scoring_config["max_conformers_per_molecule"] == 3
     assert scoring_config["target_failure_score"] == -1.5
     assert scoring_config["accept_targets"] == "all"
     assert scoring_config["docking_mode"] == "rigid-refine"
@@ -358,6 +361,7 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
     assert run_config["pfizer_3_75_filter"] is True
     assert run_config["max_br_sascore"] == 5.0
     assert run_config["max_clogp"] == 4.0
+    assert run_config["max_conformers_per_molecule"] == 3
     assert "N-dimensional Pareto" in run_config["reward"]
     assert received["objectives_path"] == "mtrl.objectives:build"
 
