@@ -68,6 +68,7 @@ def test_run_summary_reports_cumulative_filters_and_scores(tmp_path) -> None:
     assert "Strings generated: 20" in summary
     assert "Passed all gates: 13 (65.00%)" in summary
     assert "RDKit drug-likeness: 3 (15.00%)" in summary
+    assert "Protonation filter: 0 (0.00%)" in summary
     assert "Muegge filter: 3 (15.00%)" in summary
     assert "Brenk filter: 3 (15.00%)" in summary
     assert "Pfizer 3/75 filter: 4 (20.00%)" in summary

@@ -9,6 +9,7 @@ from mtrl.druglike import (
     muegge_rejection_reason,
     pfizer_3_75_rejection_reason,
 )
+from mtrl.protonation import ProtonationFilter
 from mtrl.synthetic_accessibility import br_sascore_rejection_reason
 
 
@@ -21,8 +22,11 @@ def molecule_filter_rejection_reason(
     pfizer_3_75: bool = False,
     max_br_sascore: float | None = None,
     max_clogp: float | None = None,
+    protonation_filter: ProtonationFilter | None = None,
 ) -> str | None:
     """Apply enabled inexpensive 2D gates in a stable order."""
+    if protonation_filter is not None and (reason := protonation_filter.rejection_reason(mol)):
+        return reason
     checks = (
         (rdkit_druglike, druglike_rejection_reason),
         (muegge, muegge_rejection_reason),

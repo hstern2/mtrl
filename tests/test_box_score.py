@@ -146,6 +146,40 @@ def test_score_sdf_applies_property_and_br_sascore_filters_before_docking(tmp_pa
     assert records[2]["accepted"]
 
 
+def test_score_sdf_rejects_wrong_protonation_before_docking(tmp_path) -> None:
+    input_sdf = tmp_path / "input.sdf"
+    writer = Chem.SDWriter(str(input_sdf))
+    writer.write(_mol3d_from_smiles("CC(=O)O", "acid"))
+    writer.write(_mol3d_from_smiles("CC(=O)[O-]", "acetate"))
+    writer.close()
+    receptor = tmp_path / "receptor.pdb"
+    receptor.write_text("END\n")
+    target = DockingTarget(
+        name="site_a", receptor_pdb=receptor, center=(1.0, 2.0, 3.0), size=(20.0, 20.0, 20.0)
+    )
+    result = BoxDockingScore(
+        targets={
+            "site_a": TargetDockingScore(
+                target_name="site_a", cnn_affinity=6.0, accepted=True, pose=_mol3d()
+            )
+        },
+        accepted=True,
+    )
+    pipeline = FakePipeline(result)
+    config = BoxScoringConfig(
+        targets=(target,), output_dir=tmp_path / "scored", protonation_filter=True
+    )
+
+    score_sdf(input_sdf, config, pipeline=pipeline)
+
+    assert [mol.GetProp("_Name") for mol in pipeline.seen] == ["acetate"]
+    records = [
+        json.loads(line) for line in (config.output_dir / "scores.jsonl").read_text().splitlines()
+    ]
+    assert records[0]["rejection_reason"].startswith("Protonation filter failed:")
+    assert records[1]["accepted"]
+
+
 def test_score_sdf_applies_explicit_clogp_gate_before_docking(tmp_path) -> None:
     input_sdf = tmp_path / "input.sdf"
     writer = Chem.SDWriter(str(input_sdf))

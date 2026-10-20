@@ -143,6 +143,16 @@ def score(
         "--max-clogp",
         help="Reject molecules whose RDKit cLogP exceeds this value",
     ),
+    protonation_filter: bool = typer.Option(
+        False,
+        "--protonation-filter/--no-protonation-filter",
+        help="Reject states not predicted for pH 7.0-7.8, including prediction overflow",
+    ),
+    max_protonation_variants: int = typer.Option(
+        8,
+        "--max-protonation-variants",
+        help="Maximum predicted protonation states allowed per molecule",
+    ),
     lilly_medchem_rules: bool = typer.Option(
         False,
         "--lilly-medchem-rules/--no-lilly-medchem-rules",
@@ -188,6 +198,8 @@ def score(
         raise typer.BadParameter("--max-br-sascore must be between 1 and 10")
     if max_clogp is not None and not math.isfinite(max_clogp):
         raise typer.BadParameter("--max-clogp must be finite")
+    if not 1 <= max_protonation_variants < 10000:
+        raise typer.BadParameter("--max-protonation-variants must be between 1 and 9999")
     try:
         targets = load_docking_targets(docking_targets.resolve())
         config = BoxScoringConfig(
@@ -199,6 +211,8 @@ def score(
             pfizer_3_75_filter=pfizer_3_75_filter,
             max_br_sascore=max_br_sascore,
             max_clogp=max_clogp,
+            protonation_filter=protonation_filter,
+            max_protonation_variants=max_protonation_variants,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
             verbose_tools=verbose_tools,
@@ -488,6 +502,18 @@ def rl(
         help="Reject molecules whose RDKit cLogP exceeds this value before 3D scoring",
         rich_help_panel="Molecule gates",
     ),
+    protonation_filter: bool = typer.Option(
+        False,
+        "--protonation-filter/--no-protonation-filter",
+        help="Reject states not predicted for pH 7.0-7.8, including prediction overflow",
+        rich_help_panel="Molecule gates",
+    ),
+    max_protonation_variants: int = typer.Option(
+        8,
+        "--max-protonation-variants",
+        help="Maximum predicted protonation states allowed per molecule",
+        rich_help_panel="Molecule gates",
+    ),
     lilly_medchem_rules: bool = typer.Option(
         False,
         "--lilly-medchem-rules/--no-lilly-medchem-rules",
@@ -695,6 +721,8 @@ def rl(
         raise typer.BadParameter("--max-br-sascore must be between 1 and 10")
     if max_clogp is not None and not math.isfinite(max_clogp):
         raise typer.BadParameter("--max-clogp must be finite")
+    if not 1 <= max_protonation_variants < 10000:
+        raise typer.BadParameter("--max-protonation-variants must be between 1 and 9999")
     if max_conformers_per_molecule is not None and max_conformers_per_molecule <= 0:
         raise typer.BadParameter("--max-conformers-per-molecule must be > 0")
     if docking_targets is not None and (receptor_pdb is not None or reference_sdf is not None):
@@ -750,6 +778,8 @@ def rl(
             pfizer_3_75_filter=pfizer_3_75_filter,
             max_br_sascore=max_br_sascore,
             max_clogp=max_clogp,
+            protonation_filter=protonation_filter,
+            max_protonation_variants=max_protonation_variants,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
             verbose_tools=verbose_tools,
@@ -780,6 +810,8 @@ def rl(
             pfizer_3_75_filter=pfizer_3_75_filter,
             max_br_sascore=max_br_sascore,
             max_clogp=max_clogp,
+            protonation_filter=protonation_filter,
+            max_protonation_variants=max_protonation_variants,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
             verbose_tools=verbose_tools,
@@ -821,6 +853,8 @@ def rl(
                     "pfizer_3_75_filter": pfizer_3_75_filter,
                     "max_br_sascore": max_br_sascore,
                     "max_clogp": max_clogp,
+                    "protonation_filter": protonation_filter,
+                    "max_protonation_variants": max_protonation_variants,
                     "max_conformers_per_molecule": (
                         max_conformers_per_molecule if docking_targets is not None else None
                     ),

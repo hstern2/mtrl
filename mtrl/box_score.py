@@ -10,6 +10,7 @@ from rdkit.Chem import QED, Mol
 from mtrl.config import BoxScoringConfig
 from mtrl.lilly import LillyMedchemFilter
 from mtrl.molecule_filters import molecule_filter_rejection_reason
+from mtrl.protonation import ProtonationFilter
 from mtrl.scoring import BoxDockingPipeline, BoxDockingScore
 
 
@@ -78,6 +79,9 @@ def score_sdf(
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
     records: list[dict[str, Any]] = []
+    protonation_filter = (
+        ProtonationFilter(config.max_protonation_variants) if config.protonation_filter else None
+    )
     candidate_indices: list[int] = []
     candidates: list[Mol] = []
     for index, mol in enumerate(Chem.SDMolSupplier(str(input_sdf), removeHs=False)):
@@ -107,6 +111,7 @@ def score_sdf(
             pfizer_3_75=config.pfizer_3_75_filter,
             max_br_sascore=config.max_br_sascore,
             max_clogp=config.max_clogp,
+            protonation_filter=protonation_filter,
         ):
             record["rejection_reason"] = reason
         elif mol.GetNumConformers() == 0 or not mol.GetConformer().Is3D():

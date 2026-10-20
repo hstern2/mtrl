@@ -152,6 +152,12 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
 ```
 
 All enabled molecule filters run before conformer construction and docking.
+`--protonation-filter` checks whether the emitted protonation state is among
+Dimorphite-DL predictions for pH 7.0–7.8. It rejects a molecule if the state is
+absent, prediction fails, or more than 8 states are predicted. Set
+`--max-protonation-variants N` to change that limit. The emitted AMSR molecule is
+never altered; the filter is also available with `mtrl score` and reference-mode
+RL. Repeated molecular structures are cached within each scoring process.
 `--rdkit-druglike-filter` enforces molecular weight ≤ 500, cLogP ≤ 5, H-bond
 donors ≤ 5, H-bond acceptors ≤ 10, rotatable bonds ≤ 10, and TPSA ≤ 140.
 `--muegge-filter` applies the published

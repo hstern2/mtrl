@@ -120,6 +120,11 @@ def _validate_max_clogp(value: float | None) -> None:
         raise ValueError("max_clogp must be finite")
 
 
+def _validate_max_protonation_variants(value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value < 10000:
+        raise ValueError("max_protonation_variants must be between 1 and 9999")
+
+
 @dataclass(frozen=True)
 class ScoringConfig:
     receptor_pdb: Path
@@ -135,6 +140,8 @@ class ScoringConfig:
     brenk_filter: bool = False
     pfizer_3_75_filter: bool = False
     max_clogp: float | None = None
+    protonation_filter: bool = False
+    max_protonation_variants: int = 8
 
     def validate(self) -> None:
         if not self.receptor_pdb.is_file():
@@ -145,6 +152,7 @@ class ScoringConfig:
             raise ValueError("evaluation_workers must be > 0")
         _validate_max_br_sascore(self.max_br_sascore)
         _validate_max_clogp(self.max_clogp)
+        _validate_max_protonation_variants(self.max_protonation_variants)
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -200,6 +208,8 @@ class BoxScoringConfig:
     pfizer_3_75_filter: bool = False
     max_clogp: float | None = None
     max_conformers_per_molecule: int | None = None
+    protonation_filter: bool = False
+    max_protonation_variants: int = 8
 
     def validate(self) -> None:
         if not self.targets:
@@ -213,6 +223,7 @@ class BoxScoringConfig:
             raise ValueError("evaluation_workers must be > 0")
         _validate_max_br_sascore(self.max_br_sascore)
         _validate_max_clogp(self.max_clogp)
+        _validate_max_protonation_variants(self.max_protonation_variants)
         conformer_limit = self.max_conformers_per_molecule
         if conformer_limit is not None and (
             isinstance(conformer_limit, bool)
@@ -245,6 +256,8 @@ class BoxScoringConfig:
             "max_br_sascore": self.max_br_sascore,
             "max_clogp": self.max_clogp,
             "max_conformers_per_molecule": self.max_conformers_per_molecule,
+            "protonation_filter": self.protonation_filter,
+            "max_protonation_variants": self.max_protonation_variants,
             "lilly_medchem_rules": self.lilly_medchem_rules,
             "lilly_rules_executable": self.lilly_rules_executable,
             "verbose_tools": self.verbose_tools,

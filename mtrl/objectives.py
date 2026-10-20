@@ -22,6 +22,7 @@ from mtrl import DecodedAMSR, decode_amsr, make_conformer
 from mtrl.config import BoxScoringConfig, ScoringConfig, scoring_mode_from_env
 from mtrl.lilly import LillyMedchemFilter
 from mtrl.molecule_filters import molecule_filter_rejection_reason
+from mtrl.protonation import ProtonationFilter
 from mtrl.scoring import (
     BoxDockingPipeline,
     BoxDockingScore,
@@ -56,6 +57,7 @@ def _screen_candidates(
     max_br_sascore: float | None,
     max_clogp: float | None,
     lilly_filter: LillyMedchemFilter | None,
+    protonation_filter: ProtonationFilter | None,
 ) -> tuple[list[DecodedAMSR | None], list[ScoredItem], list[int], list[DecodedAMSR]]:
     """Decode candidates and apply inexpensive molecule-level gates."""
     decoded = [decode_fn(sequence) for sequence in token_sequences]
@@ -77,6 +79,7 @@ def _screen_candidates(
             pfizer_3_75=pfizer_3_75_filter,
             max_br_sascore=max_br_sascore,
             max_clogp=max_clogp,
+            protonation_filter=protonation_filter,
         ):
             items[index].valid = False
             items[index].rejection_reason = reason
@@ -290,6 +293,11 @@ class DockingObjectives(Objectives):
         self.lilly_filter = lilly_filter
         if config.lilly_medchem_rules and self.lilly_filter is None:
             self.lilly_filter = LillyMedchemFilter(config.lilly_rules_executable)
+        self.protonation_filter = (
+            ProtonationFilter(config.max_protonation_variants)
+            if config.protonation_filter
+            else None
+        )
 
     def evaluate(self, token_sequences: list[list[str]]) -> list[ScoredItem]:
         decoded, items, candidate_indices, candidates = _screen_candidates(
@@ -302,6 +310,7 @@ class DockingObjectives(Objectives):
             self.config.max_br_sascore,
             self.config.max_clogp,
             self.lilly_filter,
+            self.protonation_filter,
         )
         diagnostics: list[StructureScore | None] = [None] * len(decoded)
         conformer_indices, conformers, results = _evaluate_candidates(
@@ -614,6 +623,9 @@ class DockingObjectives(Objectives):
             "cumulative_accepted": prior_accepted + len(accepted),
             "decode_failed": reasons.count("AMSR decode failed"),
             "disconnected_failed": reasons.count("molecule is disconnected"),
+            "protonation_failed": sum(
+                reason.startswith("Protonation filter") for reason in reasons
+            ),
             "rdkit_druglike_failed": sum(
                 reason.startswith("RDKit drug-likeness") for reason in reasons
             ),
@@ -630,6 +642,7 @@ class DockingObjectives(Objectives):
                 not (
                     reason == "AMSR decode failed"
                     or reason == "molecule is disconnected"
+                    or reason.startswith("Protonation filter")
                     or reason.startswith("RDKit drug-likeness")
                     or reason.startswith("Muegge filter")
                     or reason.startswith("Brenk filter")
@@ -745,6 +758,11 @@ class BoxDockingObjectives(Objectives):
         self.lilly_filter = lilly_filter
         if config.lilly_medchem_rules and self.lilly_filter is None:
             self.lilly_filter = LillyMedchemFilter(config.lilly_rules_executable)
+        self.protonation_filter = (
+            ProtonationFilter(config.max_protonation_variants)
+            if config.protonation_filter
+            else None
+        )
 
     def evaluate(self, token_sequences: list[list[str]]) -> list[ScoredItem]:
         decoded, items, candidate_indices, candidates = _screen_candidates(
@@ -757,6 +775,7 @@ class BoxDockingObjectives(Objectives):
             self.config.max_br_sascore,
             self.config.max_clogp,
             self.lilly_filter,
+            self.protonation_filter,
         )
         candidate_indices, candidates = _limit_conformers_per_molecule(
             token_sequences,
@@ -1128,6 +1147,9 @@ class BoxDockingObjectives(Objectives):
             ),
             "decode_failed": reasons.count("AMSR decode failed"),
             "disconnected_failed": reasons.count("molecule is disconnected"),
+            "protonation_failed": sum(
+                reason.startswith("Protonation filter") for reason in reasons
+            ),
             "rdkit_druglike_failed": sum(
                 reason.startswith("RDKit drug-likeness") for reason in reasons
             ),

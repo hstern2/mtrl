@@ -306,6 +306,9 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
             "--muegge-filter",
             "--brenk-filter",
             "--pfizer-3-75-filter",
+            "--protonation-filter",
+            "--max-protonation-variants",
+            "6",
             "--max-br-sascore",
             "5",
             "--max-clogp",
@@ -344,6 +347,8 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
     assert scoring_config["muegge_filter"] is True
     assert scoring_config["brenk_filter"] is True
     assert scoring_config["pfizer_3_75_filter"] is True
+    assert scoring_config["protonation_filter"] is True
+    assert scoring_config["max_protonation_variants"] == 6
     assert scoring_config["max_br_sascore"] == 5.0
     assert scoring_config["max_clogp"] == 4.0
     assert scoring_config["max_conformers_per_molecule"] == 3
@@ -359,6 +364,8 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
     assert run_config["muegge_filter"] is True
     assert run_config["brenk_filter"] is True
     assert run_config["pfizer_3_75_filter"] is True
+    assert run_config["protonation_filter"] is True
+    assert run_config["max_protonation_variants"] == 6
     assert run_config["max_br_sascore"] == 5.0
     assert run_config["max_clogp"] == 4.0
     assert run_config["max_conformers_per_molecule"] == 3
@@ -450,6 +457,9 @@ def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -
             "5",
             "--max-clogp",
             "4",
+            "--protonation-filter",
+            "--max-protonation-variants",
+            "5",
             "--output-dir",
             str(output),
         ],
@@ -470,4 +480,6 @@ def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -
     assert received["config"].pfizer_3_75_filter is True
     assert received["config"].max_br_sascore == 5.0
     assert received["config"].max_clogp == 4.0
+    assert received["config"].protonation_filter is True
+    assert received["config"].max_protonation_variants == 5
     assert '"retained_molecules": 1' in result.stdout

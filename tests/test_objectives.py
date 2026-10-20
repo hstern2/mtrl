@@ -1,5 +1,6 @@
 import csv
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -325,6 +326,34 @@ def test_disconnected_molecules_are_rejected_before_scoring(tmp_path) -> None:
     assert scored[0].rejection_reason == "molecule is disconnected"
     assert pipeline.seen == []
     assert not list((tmp_path / "best").glob("*.sdf"))
+
+
+def test_protonation_filter_rejects_before_conformer_scoring(tmp_path) -> None:
+    decoded = [_decoded("CC(=O)O"), _decoded("CC(=O)[O-]")]
+    pipeline = FakePipeline(
+        [
+            StructureScore(
+                cnn_affinity=6.0,
+                roshambo_tanimoto_combo=0.5,
+                minimized_rmsd=0.2,
+                accepted=True,
+            )
+        ]
+    )
+    suite = DockingObjectives(
+        replace(_config(tmp_path), protonation_filter=True),
+        decode_fn=lambda tokens: decoded[int(tokens[0])],
+        conformer_fn=lambda candidate: candidate.mol,
+        pipeline=pipeline,
+    )
+
+    scored = suite.evaluate([["0"], ["1"]])
+
+    assert scored[0].rejection_reason.startswith("Protonation filter failed:")
+    assert scored[1].valid
+    assert pipeline.seen == [decoded[1].mol]
+    with (tmp_path / "progress.csv").open(newline="") as source:
+        assert next(csv.DictReader(source))["protonation_failed"] == "1"
 
 
 def test_score_audit_records_accepted_scores_and_rejections(tmp_path) -> None:
