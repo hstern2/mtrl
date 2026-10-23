@@ -32,7 +32,10 @@ class LillyMedchemFilter:
             lines.append(f"{smiles} {name}")
 
         with TemporaryDirectory(prefix="mtrl_lilly_") as temporary:
-            input_path = Path(temporary) / "candidates.smi"
+            work = Path(temporary)
+            input_path = work / "candidates.smi"
+            rejected_stem = work / "rejected"
+            log_stem = work / "stage"
             input_path.write_text("\n".join(lines) + "\n")
             env = os.environ.copy()
             if "LILLYMOL_HOME" not in env:
@@ -44,7 +47,10 @@ class LillyMedchemFilter:
                     str(self.executable),
                     "-relaxed",
                     "-noapdm",
-                    "-nobadfiles",
+                    "-B",
+                    str(rejected_stem),
+                    "-log",
+                    str(log_stem),
                     str(input_path),
                 ],
                 cwd=temporary,
@@ -53,20 +59,29 @@ class LillyMedchemFilter:
                 capture_output=True,
                 check=False,
             )
-        if result.returncode != 0:
-            message = result.stderr.strip() or "no diagnostic output"
-            raise RuntimeError(
-                f"Lilly Medchem Rules failed with exit code {result.returncode}: {message}"
-            )
+            if result.returncode != 0:
+                message = result.stderr.strip() or "no diagnostic output"
+                raise RuntimeError(
+                    f"Lilly Medchem Rules failed with exit code {result.returncode}: {message}"
+                )
 
-        known_names = set(names)
-        accepted = {
-            field
-            for line in result.stdout.splitlines()
-            for field in line.split()[1:]
-            if field in known_names
-        }
-        return [name in accepted for name in names]
+            known_names = set(names)
+            accepted = _record_names(result.stdout.splitlines(), known_names)
+            rejected = set()
+            for path in work.glob(f"{rejected_stem.name}*"):
+                rejected.update(_record_names(path.read_text().splitlines(), known_names))
+            if accepted & rejected or accepted | rejected != known_names:
+                missing = sorted(known_names - accepted - rejected)
+                logs = "\n".join(
+                    path.read_text(errors="replace") for path in sorted(work.glob("stage*.log"))
+                )
+                diagnostic = (result.stderr + "\n" + logs).strip()[-1000:]
+                raise RuntimeError(
+                    "Lilly Medchem Rules did not classify every molecule"
+                    f" (missing: {', '.join(missing) or 'none'}): "
+                    f"{diagnostic or 'no diagnostic output'}"
+                )
+            return [name in accepted for name in names]
 
     def _infer_lillymol_home(self) -> Path | None:
         path = self.executable.resolve()
@@ -75,3 +90,12 @@ class LillyMedchemFilter:
             if (candidate / "data" / "queries" / "LillyMedchemRules").is_dir():
                 return candidate
         return None
+
+
+def _record_names(lines: list[str], known_names: set[str]) -> set[str]:
+    return {
+        field
+        for line in lines
+        for field in line.split()[1:]
+        if field in known_names
+    }
