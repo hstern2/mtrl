@@ -269,6 +269,7 @@ def test_rigid_refine_commands_disable_cnn_then_minimize_and_rescore(tmp_path) -
         targets=(target,),
         output_dir=tmp_path / "out",
         docking_mode="rigid-refine",
+        gnina_cpu=1,
         gnina_timeout_seconds=123,
     )
     ligand = tmp_path / "ligand.pdbqt"
@@ -296,10 +297,12 @@ def test_rigid_refine_commands_disable_cnn_then_minimize_and_rescore(tmp_path) -
     rigid_command, refine_command = commands
     assert rigid_command[rigid_command.index("--cnn_scoring") + 1] == "none"
     assert rigid_command[rigid_command.index("--pose_sort_order") + 1] == "Energy"
+    assert rigid_command[rigid_command.index("--cpu") + 1] == "1"
     assert "--minimize" not in rigid_command
     assert "--center_x" in rigid_command
     assert "--minimize" in refine_command
     assert refine_command[refine_command.index("--cnn_scoring") + 1] == "rescore"
+    assert refine_command[refine_command.index("--cpu") + 1] == "1"
     assert "--autobox_ligand" not in refine_command
     assert "--center_x" in refine_command
 
@@ -387,6 +390,7 @@ def test_box_config_round_trips_rigid_refine_mode(tmp_path, monkeypatch) -> None
         targets=(_targets(tmp_path)[0],),
         output_dir=tmp_path / "out",
         docking_mode="rigid-refine",
+        gnina_cpu=2,
         gnina_timeout_seconds=321,
         qed_objective=True,
         rdkit_druglike_filter=True,
@@ -404,6 +408,7 @@ def test_box_config_round_trips_rigid_refine_mode(tmp_path, monkeypatch) -> None
     restored = BoxScoringConfig.from_env()
 
     assert restored.docking_mode == "rigid-refine"
+    assert restored.gnina_cpu == 2
     assert restored.gnina_timeout_seconds == 321
     assert restored.qed_objective is True
     assert restored.rdkit_druglike_filter is True

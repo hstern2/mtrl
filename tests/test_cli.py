@@ -322,6 +322,8 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
             "all",
             "--docking-mode",
             "rigid-refine",
+            "--gnina-cpu",
+            "1",
             "--gnina-timeout-seconds",
             "300",
             "--posebusters-timeout-seconds",
@@ -356,6 +358,7 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
     assert scoring_config["target_failure_score"] == -1.5
     assert scoring_config["accept_targets"] == "all"
     assert scoring_config["docking_mode"] == "rigid-refine"
+    assert scoring_config["gnina_cpu"] == 1
     assert scoring_config["gnina_timeout_seconds"] == 300
     assert scoring_config["posebusters_timeout_seconds"] == 90
     assert scoring_config["posebusters_config"] == "dock-fast"
@@ -443,6 +446,8 @@ def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -
             "any",
             "--docking-mode",
             "rigid-refine",
+            "--gnina-cpu",
+            "1",
             "--gnina-timeout-seconds",
             "300",
             "--posebusters-timeout-seconds",
@@ -470,6 +475,7 @@ def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -
     assert received["config"].target_failure_score == -2.0
     assert received["config"].accept_targets == "any"
     assert received["config"].docking_mode == "rigid-refine"
+    assert received["config"].gnina_cpu == 1
     assert received["config"].gnina_timeout_seconds == 300
     assert received["config"].posebusters_timeout_seconds == 90
     assert received["config"].posebusters_config == "dock-fast"

@@ -200,6 +200,7 @@ class BoxScoringConfig:
     target_failure_score: float = 0.0
     accept_targets: TargetAcceptance = "any"
     docking_mode: DockingMode = "flexible"
+    gnina_cpu: int | None = None
     gnina_timeout_seconds: int = 600
     qed_objective: bool = False
     posebusters_config: PoseBustersConfig = "dock"
@@ -243,6 +244,8 @@ class BoxScoringConfig:
             raise ValueError("accept_targets must be 'any' or 'all'")
         if self.docking_mode not in {"flexible", "rigid", "rigid-refine"}:
             raise ValueError("docking_mode must be 'flexible', 'rigid', or 'rigid-refine'")
+        if self.gnina_cpu is not None and self.gnina_cpu <= 0:
+            raise ValueError("gnina_cpu must be > 0")
         if self.gnina_timeout_seconds <= 0:
             raise ValueError("gnina_timeout_seconds must be > 0")
         if self.posebusters_config not in {"dock", "dock-fast"}:
@@ -297,6 +300,7 @@ class BoxScoringConfig:
             "target_failure_score": self.target_failure_score,
             "accept_targets": self.accept_targets,
             "docking_mode": self.docking_mode,
+            "gnina_cpu": self.gnina_cpu,
             "gnina_timeout_seconds": self.gnina_timeout_seconds,
             "qed_objective": self.qed_objective,
             "posebusters_config": self.posebusters_config,

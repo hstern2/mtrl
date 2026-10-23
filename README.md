@@ -202,6 +202,10 @@ passing pose. Targets without a passing pose get the configurable failure score
 written under each generation and cumulative-front directory. The
 reference-aligned minimization workflow above remains available unchanged.
 
+`--gnina-cpu N` bounds the CPU threads used by each GNINA process. This is useful
+when `--evaluation-workers` runs many independent ligands concurrently; omitting
+it preserves GNINA's default thread selection.
+
 For RL, `--max-conformers-per-molecule N` groups candidates by canonical
 isomeric SMILES and docks at most `N` distinct emitted AMSR conformers of each
 molecule per RL process. Pareto ranking then operates on unique molecules,

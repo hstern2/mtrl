@@ -644,6 +644,7 @@ class BoxDockingPipeline:
             str(target.exhaustiveness),
             "--num_modes",
             str(target.num_modes),
+            *self._gnina_cpu_arguments(),
             "--cnn_scoring",
             cnn_scoring,
             "--pose_sort_order",
@@ -664,6 +665,7 @@ class BoxDockingPipeline:
             "--ligand",
             str(ligand_sdf),
             *self._box_arguments(target),
+            *self._gnina_cpu_arguments(),
             "--cnn_scoring",
             "rescore",
             "--out",
@@ -687,6 +689,11 @@ class BoxDockingPipeline:
             "--size_z",
             str(target.size[2]),
         ]
+
+    def _gnina_cpu_arguments(self) -> list[str]:
+        if self.config.gnina_cpu is None:
+            return []
+        return ["--cpu", str(self.config.gnina_cpu)]
 
     def _execute_gnina(self, command: list[str], output_sdf: Path, *, action: str) -> None:
         try:

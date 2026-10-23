@@ -88,6 +88,11 @@ def score(
             "(rigid placement without CNN scoring, then GNINA minimization/rescoring)"
         ),
     ),
+    gnina_cpu: int | None = typer.Option(
+        None,
+        "--gnina-cpu",
+        help="CPU threads used by each GNINA process; omit to use GNINA's default",
+    ),
     gnina_timeout_seconds: int = typer.Option(
         600,
         "--gnina-timeout-seconds",
@@ -209,6 +214,8 @@ def score(
 
     if evaluation_workers <= 0:
         raise typer.BadParameter("--evaluation-workers must be > 0")
+    if gnina_cpu is not None and gnina_cpu <= 0:
+        raise typer.BadParameter("--gnina-cpu must be > 0")
     if aev_plig_workers <= 0:
         raise typer.BadParameter("--aev-plig-workers must be > 0")
     if aev_plig_timeout_seconds <= 0:
@@ -253,6 +260,7 @@ def score(
             target_failure_score=target_failure_score,
             accept_targets=cast(TargetAcceptance, accept_targets),
             docking_mode=cast(DockingMode, docking_mode),
+            gnina_cpu=gnina_cpu,
             gnina_timeout_seconds=gnina_timeout_seconds,
             qed_objective=qed_objective,
             posebusters_config=cast(PoseBustersConfig, posebusters_config),
@@ -454,6 +462,12 @@ def rl(
             "without CNN scoring, then GNINA minimization/rescoring)"
         ),
         rich_help_panel="Scoring inputs",
+    ),
+    gnina_cpu: int | None = typer.Option(
+        None,
+        "--gnina-cpu",
+        help="Box mode: CPU threads used by each GNINA process",
+        rich_help_panel="Parallel evaluation",
     ),
     gnina_timeout_seconds: int = typer.Option(
         600,
@@ -765,6 +779,8 @@ def rl(
     ):
         if value <= 0:
             raise typer.BadParameter(f"{name} must be > 0")
+    if gnina_cpu is not None and gnina_cpu <= 0:
+        raise typer.BadParameter("--gnina-cpu must be > 0")
     for name, value in (
         ("--kl-beta", kl_beta),
         ("--pareto-lambda", pareto_lambda),
@@ -865,6 +881,7 @@ def rl(
             target_failure_score=target_failure_score,
             accept_targets=cast(TargetAcceptance, accept_targets),
             docking_mode=cast(DockingMode, docking_mode),
+            gnina_cpu=gnina_cpu,
             gnina_timeout_seconds=gnina_timeout_seconds,
             qed_objective=qed_objective,
             posebusters_config=cast(PoseBustersConfig, posebusters_config),
@@ -922,6 +939,7 @@ def rl(
                     "checkpoint_every": checkpoint_every,
                     "docking_mode": docking_mode if docking_targets is not None else None,
                     "evaluation_workers": evaluation_workers,
+                    "gnina_cpu": gnina_cpu if docking_targets is not None else None,
                     "gnina_timeout_seconds": (
                         gnina_timeout_seconds if docking_targets is not None else None
                     ),
