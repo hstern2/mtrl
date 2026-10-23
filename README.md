@@ -91,7 +91,8 @@ are removed after each molecule. External-tool chatter is hidden unless
 
 Full GNINA docking without a reference ligand is configured with a JSON target
 manifest. Each entry is one inseparable receptor/box specification and becomes
-one independently maximized `CNNaffinity` objective:
+one independently maximized `CNNaffinity` objective. Optional AEV-PLIG
+rescoring adds a second objective for every target:
 
 ```json
 {
@@ -152,12 +153,31 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
 ```
 
 All enabled molecule filters run before conformer construction and docking.
-`--protonation-filter` checks whether the emitted protonation state is among
+The protonation filter is enabled by default; use `--no-protonation-filter` to
+disable it. It checks whether the emitted protonation state is among
 Dimorphite-DL predictions for pH 7.0–7.8. It rejects a molecule if the state is
 absent, prediction fails, or more than 8 states are predicted. Set
 `--max-protonation-variants N` to change that limit. The emitted AMSR molecule is
-never altered; the filter is also available with `mtrl score` and reference-mode
-RL. Repeated molecular structures are cached within each scoring process.
+never altered; the filter applies to `mtrl score` and both RL modes. It accepts
+any predicted state in the range rather than selecting a dominant state at pH
+7.4. Repeated molecular structures are cached within each scoring process.
+
+To enable [AEV-PLIG](https://github.com/isakvals/AEV-PLIG), provide its checkout
+and Python environment to either `mtrl score` or box-mode `mtrl rl`:
+
+```bash
+--aev-plig-dir /path/to/AEV-PLIG \
+--aev-plig-python /path/to/aev-plig/bin/python
+```
+
+Every PoseBusters-passing GNINA-minimized pose is rescored in bounded batches.
+Explicit ligand hydrogens are restored without changing the
+emitted ionization state. Each target gains a separately maximized
+`aev_plig_affinity__<target>` predicted-pK objective; its best pose may differ
+from the CNNaffinity-selected pose. AEV-selected poses use the
+`__aev_plig.sdf` suffix. Tool-level failures stop the run; a target for which
+AEV-PLIG produces no pose score receives the configured failure score.
+
 `--rdkit-druglike-filter` enforces molecular weight ≤ 500, cLogP ≤ 5, H-bond
 donors ≤ 5, H-bond acceptors ≤ 10, rotatable bonds ≤ 10, and TPSA ≤ 140.
 `--muegge-filter` applies the published
@@ -175,13 +195,12 @@ than 75 Å².
 structural-alert gate. `--max-clogp 4` independently rejects molecules whose
 RDKit cLogP exceeds 4. GNINA performs a full search in every configured box.
 Every returned pose is checked with the receptor-aware PoseBusters docking
-configuration, and each objective uses the highest `CNNaffinity` among that
+configuration, and each scoring method uses its highest score among that
 target's passing poses. A molecule is retained when at least one target has a
 passing pose. Targets without a passing pose get the configurable failure score
 (`0.0` by default); no pose is fabricated for them. Selected valid poses are
-written as one SDF per target under each generation and cumulative-front
-directory. The reference-aligned minimization workflow above remains available
-unchanged.
+written under each generation and cumulative-front directory. The
+reference-aligned minimization workflow above remains available unchanged.
 
 For RL, `--max-conformers-per-molecule N` groups candidates by canonical
 isomeric SMILES and docks at most `N` distinct emitted AMSR conformers of each
@@ -199,10 +218,10 @@ the largest molecule and scaffold shares, both before and after scoring gates.
 `mtrl score` applies the same target loading, molecule filters, full docking,
 PoseBusters checks, target acceptance policy, and failed-target score without
 sampling or training a model. Its input SDF must contain 3D coordinates. It
-writes `scores.jsonl`, `summary.json`, `scoring_config.json`, and one selected-pose
-SDF per target under `poses/`. `mtrl validate-targets` resolves relative receptor
-paths and validates all names, files, centers, box sizes, exhaustiveness values,
-and mode counts without invoking external scoring tools.
+writes `scores.jsonl`, `summary.json`, `scoring_config.json`, and selected-pose
+SDFs under `poses/`. `mtrl validate-targets` resolves relative receptor paths and
+validates all names, files, centers, box sizes, exhaustiveness values, and mode
+counts without invoking external scoring tools.
 
 The Python API can add molecular objectives without changing the docking
 pipeline. Pass `Objective` instances through

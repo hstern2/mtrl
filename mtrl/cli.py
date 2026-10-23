@@ -108,6 +108,35 @@ def score(
         "--qed-objective/--no-qed-objective",
         help="Include RDKit QED in reported objective scores",
     ),
+    aev_plig_dir: Path | None = typer.Option(
+        None,
+        "--aev-plig-dir",
+        exists=True,
+        file_okay=False,
+        help="AEV-PLIG checkout; enables batched rescoring of passing minimized poses",
+    ),
+    aev_plig_python: Path | None = typer.Option(
+        None,
+        "--aev-plig-python",
+        exists=True,
+        dir_okay=False,
+        help="Python executable containing the AEV-PLIG dependencies",
+    ),
+    aev_plig_model: str = typer.Option(
+        "model_GATv2Net_ligsim90_fep_benchmark",
+        "--aev-plig-model",
+        help="AEV-PLIG trained-model basename",
+    ),
+    aev_plig_workers: int = typer.Option(
+        4,
+        "--aev-plig-workers",
+        help="CPU workers used for AEV-PLIG graph construction",
+    ),
+    aev_plig_timeout_seconds: int = typer.Option(
+        600,
+        "--aev-plig-timeout-seconds",
+        help="Maximum wall time for each batched AEV-PLIG invocation",
+    ),
     evaluation_workers: int = typer.Option(
         _CLI_EVALUATION_WORKERS,
         "--evaluation-workers",
@@ -144,7 +173,7 @@ def score(
         help="Reject molecules whose RDKit cLogP exceeds this value",
     ),
     protonation_filter: bool = typer.Option(
-        False,
+        True,
         "--protonation-filter/--no-protonation-filter",
         help="Reject states not predicted for pH 7.0-7.8, including prediction overflow",
     ),
@@ -180,6 +209,10 @@ def score(
 
     if evaluation_workers <= 0:
         raise typer.BadParameter("--evaluation-workers must be > 0")
+    if aev_plig_workers <= 0:
+        raise typer.BadParameter("--aev-plig-workers must be > 0")
+    if aev_plig_timeout_seconds <= 0:
+        raise typer.BadParameter("--aev-plig-timeout-seconds must be > 0")
     if gnina_timeout_seconds <= 0:
         raise typer.BadParameter("--gnina-timeout-seconds must be > 0")
     if posebusters_timeout_seconds <= 0:
@@ -224,6 +257,13 @@ def score(
             qed_objective=qed_objective,
             posebusters_config=cast(PoseBustersConfig, posebusters_config),
             posebusters_timeout_seconds=posebusters_timeout_seconds,
+            aev_plig_dir=aev_plig_dir.resolve() if aev_plig_dir is not None else None,
+            aev_plig_python=(
+                aev_plig_python.resolve() if aev_plig_python is not None else None
+            ),
+            aev_plig_model=aev_plig_model,
+            aev_plig_workers=aev_plig_workers,
+            aev_plig_timeout_seconds=aev_plig_timeout_seconds,
         )
         summary = score_sdf(molecules_sdf.resolve(), config)
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
@@ -439,6 +479,40 @@ def rl(
         help="Box mode: add RDKit QED as an independent Pareto objective",
         rich_help_panel="Scoring inputs",
     ),
+    aev_plig_dir: Path | None = typer.Option(
+        None,
+        "--aev-plig-dir",
+        exists=True,
+        file_okay=False,
+        help="Box mode: AEV-PLIG checkout; adds one rescoring objective per target",
+        rich_help_panel="Scoring inputs",
+    ),
+    aev_plig_python: Path | None = typer.Option(
+        None,
+        "--aev-plig-python",
+        exists=True,
+        dir_okay=False,
+        help="Box mode: Python executable containing the AEV-PLIG dependencies",
+        rich_help_panel="Scoring inputs",
+    ),
+    aev_plig_model: str = typer.Option(
+        "model_GATv2Net_ligsim90_fep_benchmark",
+        "--aev-plig-model",
+        help="Box mode: AEV-PLIG trained-model basename",
+        rich_help_panel="Scoring inputs",
+    ),
+    aev_plig_workers: int = typer.Option(
+        4,
+        "--aev-plig-workers",
+        help="Box mode: CPU workers used for AEV-PLIG graph construction",
+        rich_help_panel="Parallel evaluation",
+    ),
+    aev_plig_timeout_seconds: int = typer.Option(
+        600,
+        "--aev-plig-timeout-seconds",
+        help="Box mode: maximum wall time for each batched AEV-PLIG invocation",
+        rich_help_panel="Scoring inputs",
+    ),
     max_conformers_per_molecule: int | None = typer.Option(
         None,
         "--max-conformers-per-molecule",
@@ -503,7 +577,7 @@ def rl(
         rich_help_panel="Molecule gates",
     ),
     protonation_filter: bool = typer.Option(
-        False,
+        True,
         "--protonation-filter/--no-protonation-filter",
         help="Reject states not predicted for pH 7.0-7.8, including prediction overflow",
         rich_help_panel="Molecule gates",
@@ -686,6 +760,8 @@ def rl(
         ("--evaluation-workers", evaluation_workers),
         ("--gnina-timeout-seconds", gnina_timeout_seconds),
         ("--posebusters-timeout-seconds", posebusters_timeout_seconds),
+        ("--aev-plig-workers", aev_plig_workers),
+        ("--aev-plig-timeout-seconds", aev_plig_timeout_seconds),
     ):
         if value <= 0:
             raise typer.BadParameter(f"{name} must be > 0")
@@ -737,6 +813,8 @@ def rl(
         raise typer.BadParameter(
             "--max-conformers-per-molecule currently requires --docking-targets"
         )
+    if docking_targets is None and (aev_plig_dir is not None or aev_plig_python is not None):
+        raise typer.BadParameter("AEV-PLIG rescoring requires --docking-targets")
     output_dir = output_dir.resolve()
     rank = int(os.environ.get("RANK", "0"))
     resume_step = 0
@@ -792,6 +870,13 @@ def rl(
             posebusters_config=cast(PoseBustersConfig, posebusters_config),
             posebusters_timeout_seconds=posebusters_timeout_seconds,
             max_conformers_per_molecule=max_conformers_per_molecule,
+            aev_plig_dir=aev_plig_dir.resolve() if aev_plig_dir is not None else None,
+            aev_plig_python=(
+                aev_plig_python.resolve() if aev_plig_python is not None else None
+            ),
+            aev_plig_model=aev_plig_model,
+            aev_plig_workers=aev_plig_workers,
+            aev_plig_timeout_seconds=aev_plig_timeout_seconds,
         )
         reward_description = (
             "molecule-balanced global-batch N-dimensional Pareto rank and crowding distance"
@@ -847,6 +932,21 @@ def rl(
                         posebusters_config if docking_targets is not None else None
                     ),
                     "qed_objective": qed_objective if docking_targets is not None else None,
+                    "aev_plig_dir": (
+                        str(aev_plig_dir.resolve())
+                        if docking_targets is not None and aev_plig_dir is not None
+                        else None
+                    ),
+                    "aev_plig_python": (
+                        str(aev_plig_python.resolve())
+                        if docking_targets is not None and aev_plig_python is not None
+                        else None
+                    ),
+                    "aev_plig_model": aev_plig_model if aev_plig_dir is not None else None,
+                    "aev_plig_workers": aev_plig_workers if aev_plig_dir is not None else None,
+                    "aev_plig_timeout_seconds": (
+                        aev_plig_timeout_seconds if aev_plig_dir is not None else None
+                    ),
                     "rdkit_druglike_filter": rdkit_druglike_filter,
                     "muegge_filter": muegge_filter,
                     "brenk_filter": brenk_filter,

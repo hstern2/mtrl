@@ -1,6 +1,5 @@
 import csv
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -47,6 +46,7 @@ def _config(
     brenk: bool = False,
     pfizer_3_75: bool = False,
     max_br_sascore: float | None = None,
+    protonation_filter: bool = False,
 ) -> ScoringConfig:
     return ScoringConfig(
         receptor_pdb=Path("receptor.pdb"),
@@ -58,6 +58,7 @@ def _config(
         pfizer_3_75_filter=pfizer_3_75,
         max_br_sascore=max_br_sascore,
         lilly_medchem_rules=lilly,
+        protonation_filter=protonation_filter,
     )
 
 
@@ -341,7 +342,7 @@ def test_protonation_filter_rejects_before_conformer_scoring(tmp_path) -> None:
         ]
     )
     suite = DockingObjectives(
-        replace(_config(tmp_path), protonation_filter=True),
+        _config(tmp_path, protonation_filter=True),
         decode_fn=lambda tokens: decoded[int(tokens[0])],
         conformer_fn=lambda candidate: candidate.mol,
         pipeline=pipeline,

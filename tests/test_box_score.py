@@ -4,7 +4,7 @@ import pytest
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-from mtrl.box_score import score_sdf
+from mtrl.box_score import _objective_scores, score_sdf
 from mtrl.config import BoxScoringConfig, DockingTarget
 from mtrl.scoring import BoxDockingScore, TargetDockingScore
 
@@ -17,6 +17,38 @@ class FakePipeline:
     def score_batch(self, mols):
         self.seen = mols
         return [self.result for _ in mols]
+
+
+def test_score_reports_aev_plig_as_an_independent_target_objective(tmp_path) -> None:
+    receptor = tmp_path / "receptor.pdb"
+    receptor.write_text("END\n")
+    target = DockingTarget(
+        name="site_a",
+        receptor_pdb=receptor,
+        center=(0.0, 0.0, 0.0),
+        size=(20.0, 20.0, 20.0),
+    )
+    result = BoxDockingScore(
+        targets={
+            target.name: TargetDockingScore(
+                target_name=target.name,
+                cnn_affinity=6.2,
+                aev_plig_affinity=7.1,
+                accepted=True,
+            )
+        },
+        accepted=True,
+    )
+    config = BoxScoringConfig(
+        targets=(target,),
+        output_dir=tmp_path / "out",
+        aev_plig_dir=tmp_path / "AEV-PLIG",
+    )
+
+    assert _objective_scores(result, config, Chem.MolFromSmiles("CCO")) == {
+        "gnina_cnn_affinity__site_a": 6.2,
+        "aev_plig_affinity__site_a": 7.1,
+    }
 
 
 def _mol3d() -> Chem.Mol:
@@ -131,6 +163,7 @@ def test_score_sdf_applies_property_and_br_sascore_filters_before_docking(tmp_pa
         output_dir=tmp_path / "scored",
         rdkit_druglike_filter=True,
         max_br_sascore=5.0,
+        protonation_filter=False,
     )
 
     summary = score_sdf(input_sdf, config, pipeline=pipeline)
@@ -166,9 +199,7 @@ def test_score_sdf_rejects_wrong_protonation_before_docking(tmp_path) -> None:
         accepted=True,
     )
     pipeline = FakePipeline(result)
-    config = BoxScoringConfig(
-        targets=(target,), output_dir=tmp_path / "scored", protonation_filter=True
-    )
+    config = BoxScoringConfig(targets=(target,), output_dir=tmp_path / "scored")
 
     score_sdf(input_sdf, config, pipeline=pipeline)
 
@@ -203,7 +234,10 @@ def test_score_sdf_applies_explicit_clogp_gate_before_docking(tmp_path) -> None:
         accepted=True,
     )
     pipeline = FakePipeline(result)
-    config = BoxScoringConfig(targets=(target,), output_dir=tmp_path / "scored", max_clogp=4.0)
+    config = BoxScoringConfig(
+        targets=(target,), output_dir=tmp_path / "scored", max_clogp=4.0,
+        protonation_filter=False,
+    )
 
     score_sdf(input_sdf, config, pipeline=pipeline)
 
@@ -283,6 +317,7 @@ def test_score_sdf_applies_muegge_and_brenk_before_docking(tmp_path) -> None:
         output_dir=tmp_path / "scored",
         muegge_filter=True,
         brenk_filter=True,
+        protonation_filter=False,
     )
 
     summary = score_sdf(input_sdf, config, pipeline=pipeline)

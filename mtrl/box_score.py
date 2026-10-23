@@ -26,6 +26,13 @@ def _objective_scores(
             else config.target_failure_score
         )
         scores[f"gnina_cnn_affinity__{target.name}"] = value
+        if config.aev_plig_dir is not None:
+            aev_value = (
+                float(target_result.aev_plig_affinity)
+                if target_result.accepted and target_result.aev_plig_affinity is not None
+                else config.target_failure_score
+            )
+            scores[f"aev_plig_affinity__{target.name}"] = aev_value
     if config.qed_objective:
         scores["qed"] = float(QED.qed(Chem.RemoveHs(mol)))
     return scores
@@ -34,6 +41,9 @@ def _objective_scores(
 def _write_pose_sdfs(
     output_dir: Path,
     pose_records: dict[str, list[tuple[dict[str, Any], Mol]]],
+    *,
+    suffix: str = "",
+    selection_method: str = "gnina_cnn_affinity",
 ) -> None:
     poses_dir = output_dir / "poses"
     if not any(pose_records.values()):
@@ -42,7 +52,7 @@ def _write_pose_sdfs(
     for target_name, records in pose_records.items():
         if not records:
             continue
-        writer = Chem.SDWriter(str(poses_dir / f"{target_name}.sdf"))
+        writer = Chem.SDWriter(str(poses_dir / f"{target_name}{suffix}.sdf"))
         try:
             for record, pose in records:
                 output = Chem.Mol(pose)
@@ -50,6 +60,7 @@ def _write_pose_sdfs(
                 output.SetProp("input_index", str(record["index"]))
                 output.SetProp("SMILES", record["smiles"])
                 output.SetProp("docking_target", target_name)
+                output.SetProp("pose_selection_method", selection_method)
                 for objective_name, value in record["objectives"].items():
                     output.SetProp(objective_name, str(value))
                 for key, value in record["targets"][target_name].items():
@@ -147,6 +158,9 @@ def score_sdf(
     pose_records: dict[str, list[tuple[dict[str, Any], Mol]]] = {
         target.name: [] for target in config.targets
     }
+    aev_pose_records: dict[str, list[tuple[dict[str, Any], Mol]]] = {
+        target.name: [] for target in config.targets
+    }
     for record_index, mol, result in zip(candidate_indices, candidates, results, strict=True):
         record = records[record_index]
         record["accepted"] = result.accepted
@@ -160,6 +174,8 @@ def score_sdf(
         for target_name, target_result in result.targets.items():
             if target_result.accepted and target_result.pose is not None:
                 pose_records[target_name].append((record, target_result.pose))
+            if target_result.accepted and target_result.aev_plig_pose is not None:
+                aev_pose_records[target_name].append((record, target_result.aev_plig_pose))
 
     scores_path = config.output_dir / "scores.jsonl"
     scores_path.write_text("".join(json.dumps(record, sort_keys=True) + "\n" for record in records))
@@ -167,6 +183,13 @@ def score_sdf(
         json.dumps(config.to_dict(), indent=2, sort_keys=True) + "\n"
     )
     _write_pose_sdfs(config.output_dir, pose_records)
+    if config.aev_plig_dir is not None:
+        _write_pose_sdfs(
+            config.output_dir,
+            aev_pose_records,
+            suffix="__aev_plig",
+            selection_method="aev_plig_affinity",
+        )
 
     summary = {
         "input_records": len(records),

@@ -22,6 +22,7 @@ from rdkit import Chem, log_handler, rdBase
 from rdkit.Chem import Mol, rdMolAlign
 
 from mtrl import DecodedAMSR, make_conformer
+from mtrl.aev_plig import AEVPligInput, AEVPligScorer
 from mtrl.config import BoxScoringConfig, DockingTarget, ScoringConfig
 
 
@@ -347,6 +348,9 @@ class TargetDockingScore:
     vina_affinity: float | None = None
     pose_index: int | None = None
     pose_centroid_distance: float | None = None
+    aev_plig_affinity: float | None = None
+    aev_plig_pose_index: int | None = None
+    aev_plig_rejection_reason: str = ""
     rigid_vina_affinity: float | None = None
     rigid_conformer_rmsd: float | None = None
     refined_conformer_rmsd: float | None = None
@@ -356,6 +360,8 @@ class TargetDockingScore:
     accepted: bool = False
     rejection_reason: str = ""
     pose: Mol | None = None
+    aev_plig_pose: Mol | None = None
+    passing_poses: list[Mol] = field(default_factory=list, repr=False)
 
     def to_record(self) -> dict[str, Any]:
         """Return serializable diagnostics, excluding the RDKit pose."""
@@ -368,6 +374,9 @@ class TargetDockingScore:
             "refined_conformer_rmsd": self.refined_conformer_rmsd,
             "pose_index": self.pose_index,
             "pose_centroid_distance": self.pose_centroid_distance,
+            "aev_plig_affinity": self.aev_plig_affinity,
+            "aev_plig_pose_index": self.aev_plig_pose_index,
+            "aev_plig_rejection_reason": self.aev_plig_rejection_reason,
             "n_poses": self.n_poses,
             "n_passing_poses": self.n_passing_poses,
             "posebusters_failures": self.posebusters_failures,
@@ -417,8 +426,11 @@ class BoxDockingPipeline:
         self.batch_number += 1
         names = [f"r{self.rank}_b{batch_number}_m{i}" for i in range(len(mols))]
         if self.workers == 1 or len(mols) <= 1:
-            return [self._score_one(mol, name) for mol, name in zip(mols, names, strict=True)]
-        return list(self._executor().map(_score_mol_in_box_worker, mols, names))
+            results = [self._score_one(mol, name) for mol, name in zip(mols, names, strict=True)]
+        else:
+            results = list(self._executor().map(_score_mol_in_box_worker, mols, names))
+        self._apply_aev_plig(results)
+        return results
 
     def evaluate_decoded_batch(
         self, candidates: list[DecodedAMSR]
@@ -439,8 +451,59 @@ class BoxDockingPipeline:
                     )
                 else:
                     results.append((conformer, self._score_one(conformer, name)))
-            return results
-        return list(self._executor().map(_evaluate_decoded_in_box_worker, candidates, names))
+        else:
+            results = list(self._executor().map(_evaluate_decoded_in_box_worker, candidates, names))
+        self._apply_aev_plig([score for _, score in results])
+        return results
+
+    def _apply_aev_plig(self, results: list[BoxDockingScore]) -> None:
+        if self.config.aev_plig_dir is None:
+            return
+        targets = {target.name: target for target in self.config.targets}
+        inputs = []
+        pose_by_identifier: dict[str, tuple[TargetDockingScore, Mol, int]] = {}
+        for molecule_index, result in enumerate(results):
+            for target_index, (target_name, target_result) in enumerate(result.targets.items()):
+                target = targets[target_name]
+                for passing_index, pose in enumerate(target_result.passing_poses, start=1):
+                    pose_index = (
+                        pose.GetIntProp("_mtrl_pose_index")
+                        if pose.HasProp("_mtrl_pose_index")
+                        else passing_index
+                    )
+                    identifier = f"m{molecule_index}_t{target_index}_p{pose_index}"
+                    inputs.append(AEVPligInput(identifier, target.receptor_pdb, pose))
+                    pose_by_identifier[identifier] = (target_result, pose, pose_index)
+
+        scorer = AEVPligScorer(
+            self.config.aev_plig_dir,
+            python=self.config.aev_plig_python,
+            model=self.config.aev_plig_model,
+            workers=self.config.aev_plig_workers,
+            timeout_seconds=self.config.aev_plig_timeout_seconds,
+            environment=_gnina_environment(self.local_rank),
+            verbose=self.config.verbose_tools,
+        )
+        predictions = scorer.score(inputs)
+        for identifier, affinity in predictions.items():
+            mapped = pose_by_identifier.get(identifier)
+            if mapped is None:
+                continue
+            target_result, pose, pose_index = mapped
+            if (
+                target_result.aev_plig_affinity is None
+                or affinity > target_result.aev_plig_affinity
+            ):
+                target_result.aev_plig_affinity = affinity
+                target_result.aev_plig_pose_index = pose_index
+                target_result.aev_plig_pose = Chem.Mol(pose)
+        for result in results:
+            for target_result in result.targets.values():
+                if target_result.passing_poses and target_result.aev_plig_affinity is None:
+                    target_result.aev_plig_rejection_reason = (
+                        "AEV-PLIG returned no prediction for any PoseBusters-passing pose"
+                    )
+                target_result.passing_poses.clear()
 
     def _executor(self) -> ProcessPoolExecutor:
         if self._pool is None:
@@ -508,6 +571,7 @@ class BoxDockingPipeline:
                         output_sdf,
                         center=target.center,
                         quiet=not self.config.verbose_tools,
+                        retain_passing_poses=self.config.aev_plig_dir is not None,
                     )
                 except Exception as error:
                     target_results[target.name] = TargetDockingScore(
@@ -750,8 +814,10 @@ class BoxDockingPipeline:
         *,
         center: tuple[float, float, float] | None = None,
         quiet: bool = True,
+        retain_passing_poses: bool = False,
     ) -> TargetDockingScore:
         candidates: list[TargetDockingScore] = []
+        passing_poses: list[Mol] = []
         n_poses = 0
         n_passing = 0
         failures: Counter[str] = Counter()
@@ -765,6 +831,10 @@ class BoxDockingPipeline:
                 failures.update(check for check in failed_checks.split(",") if check)
                 continue
             n_passing += 1
+            if retain_passing_poses:
+                passing_pose = Chem.Mol(pose)
+                passing_pose.SetIntProp("_mtrl_pose_index", pose_index)
+                passing_poses.append(passing_pose)
             affinity = _float_property(properties, "CNNaffinity")
             if affinity is None:
                 continue
@@ -795,6 +865,7 @@ class BoxDockingPipeline:
                 n_passing_poses=n_passing,
                 posebusters_failures=dict(failures),
                 rejection_reason=reason,
+                passing_poses=passing_poses,
             )
 
         selected = max(
@@ -806,6 +877,7 @@ class BoxDockingPipeline:
         selected.n_poses = n_poses
         selected.n_passing_poses = n_passing
         selected.posebusters_failures = dict(failures)
+        selected.passing_poses = passing_poses
         if center is not None and selected.pose is not None:
             conformer = selected.pose.GetConformer()
             heavy_atom_indices = [

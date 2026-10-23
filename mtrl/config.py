@@ -4,6 +4,7 @@ import json
 import math
 import os
 import re
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -140,7 +141,7 @@ class ScoringConfig:
     brenk_filter: bool = False
     pfizer_3_75_filter: bool = False
     max_clogp: float | None = None
-    protonation_filter: bool = False
+    protonation_filter: bool = True
     max_protonation_variants: int = 8
 
     def validate(self) -> None:
@@ -208,8 +209,13 @@ class BoxScoringConfig:
     pfizer_3_75_filter: bool = False
     max_clogp: float | None = None
     max_conformers_per_molecule: int | None = None
-    protonation_filter: bool = False
+    protonation_filter: bool = True
     max_protonation_variants: int = 8
+    aev_plig_dir: Path | None = None
+    aev_plig_python: Path | None = None
+    aev_plig_model: str = "model_GATv2Net_ligsim90_fep_benchmark"
+    aev_plig_workers: int = 4
+    aev_plig_timeout_seconds: int = 600
 
     def validate(self) -> None:
         if not self.targets:
@@ -243,6 +249,32 @@ class BoxScoringConfig:
             raise ValueError("posebusters_config must be 'dock' or 'dock-fast'")
         if self.posebusters_timeout_seconds <= 0:
             raise ValueError("posebusters_timeout_seconds must be > 0")
+        if self.aev_plig_dir is None:
+            if self.aev_plig_python is not None:
+                raise ValueError("aev_plig_python requires aev_plig_dir")
+            return
+        if not self.aev_plig_dir.is_dir():
+            raise ValueError(f"AEV-PLIG directory does not exist: {self.aev_plig_dir}")
+        script = self.aev_plig_dir / "process_and_predict.py"
+        if not script.is_file():
+            raise ValueError(f"AEV-PLIG predictor does not exist: {script}")
+        python = self.aev_plig_python or Path(sys.executable)
+        if not python.is_file():
+            raise ValueError(f"AEV-PLIG Python executable does not exist: {python}")
+        if not self.aev_plig_model:
+            raise ValueError("aev_plig_model must not be empty")
+        model_dir = self.aev_plig_dir / "output" / "trained_models"
+        model_files = [
+            model_dir / f"{self.aev_plig_model}.pickle",
+            *(model_dir / f"{self.aev_plig_model}_{index}.model" for index in range(10)),
+        ]
+        missing = [str(path) for path in model_files if not path.is_file()]
+        if missing:
+            raise ValueError(f"AEV-PLIG model is incomplete; missing: {', '.join(missing)}")
+        if self.aev_plig_workers <= 0:
+            raise ValueError("aev_plig_workers must be > 0")
+        if self.aev_plig_timeout_seconds <= 0:
+            raise ValueError("aev_plig_timeout_seconds must be > 0")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -269,6 +301,13 @@ class BoxScoringConfig:
             "qed_objective": self.qed_objective,
             "posebusters_config": self.posebusters_config,
             "posebusters_timeout_seconds": self.posebusters_timeout_seconds,
+            "aev_plig_dir": str(self.aev_plig_dir) if self.aev_plig_dir is not None else None,
+            "aev_plig_python": (
+                str(self.aev_plig_python) if self.aev_plig_python is not None else None
+            ),
+            "aev_plig_model": self.aev_plig_model,
+            "aev_plig_workers": self.aev_plig_workers,
+            "aev_plig_timeout_seconds": self.aev_plig_timeout_seconds,
         }
 
     def install(self) -> None:
@@ -287,6 +326,9 @@ class BoxScoringConfig:
         if mode != "box_docking":
             raise RuntimeError(f"expected box-docking scoring configuration, found {mode!r}")
         values["output_dir"] = Path(values["output_dir"])
+        for key in ("aev_plig_dir", "aev_plig_python"):
+            if values.get(key) is not None:
+                values[key] = Path(values[key])
         values["targets"] = tuple(DockingTarget.from_dict(target) for target in values["targets"])
         config = cls(**values)
         config.validate()

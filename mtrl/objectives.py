@@ -237,6 +237,23 @@ class BoxCNNaffinityObjective(Objective):
         return scores
 
 
+class BoxAEVPligObjective(Objective):
+    """AEV-PLIG predicted pK for one named receptor/box target."""
+
+    def __init__(self, target_name: str, failure_score: float = 0.0) -> None:
+        self.target_name = target_name
+        self.failure_score = failure_score
+        super().__init__(name=f"aev_plig_affinity__{target_name}", direction="maximize")
+
+    def score_batch(self, items: list[Any]) -> list[float]:
+        scores = []
+        for item in items:
+            result = item.docking.targets[self.target_name]
+            affinity = result.aev_plig_affinity if result.accepted else None
+            scores.append(float(affinity) if affinity is not None else self.failure_score)
+        return scores
+
+
 class QEDObjective(Objective):
     """RDKit quantitative estimate of drug-likeness."""
 
@@ -730,6 +747,11 @@ class BoxDockingObjectives(Objectives):
             BoxCNNaffinityObjective(target.name, config.target_failure_score)
             for target in config.targets
         ]
+        if config.aev_plig_dir is not None:
+            objectives.extend(
+                BoxAEVPligObjective(target.name, config.target_failure_score)
+                for target in config.targets
+            )
         if config.qed_objective:
             objectives.append(QEDObjective())
         if additional_objectives:
@@ -931,10 +953,13 @@ class BoxDockingObjectives(Objectives):
             if not item.valid or candidate is None or diagnostic is None:
                 continue
             pose_blocks = {}
+            aev_pose_blocks = {}
             target_metadata = {}
             for target_name, result in diagnostic.targets.items():
                 if result.accepted and result.pose is not None:
                     pose_blocks[target_name] = Chem.MolToMolBlock(result.pose)
+                if result.accepted and result.aev_plig_pose is not None:
+                    aev_pose_blocks[target_name] = Chem.MolToMolBlock(result.aev_plig_pose)
                 target_metadata[target_name] = result.to_record()
             records.append(
                 {
@@ -946,6 +971,8 @@ class BoxDockingObjectives(Objectives):
                     "scores": dict(item.scores),
                     "targets": target_metadata,
                     "pose_blocks": pose_blocks,
+                    "aev_pose_blocks": aev_pose_blocks,
+                    "aev_targets": target_metadata,
                 }
             )
         return records
@@ -1015,8 +1042,11 @@ class BoxDockingObjectives(Objectives):
                 int(item.get("conformer_count", 1)) for item in molecule_records
             )
             record["pose_blocks"] = {}
+            record["aev_pose_blocks"] = {}
             record["targets"] = {}
+            record["aev_targets"] = {}
             record["pose_amsrs"] = {}
+            record["aev_pose_amsrs"] = {}
             for target in self.config.targets:
                 objective_name = f"gnina_cnn_affinity__{target.name}"
                 pose_records = [
@@ -1043,6 +1073,25 @@ class BoxDockingObjectives(Objectives):
                     )
                     if diagnostic is not None:
                         record["targets"][target.name] = diagnostic
+                if self.config.aev_plig_dir is not None:
+                    aev_objective = f"aev_plig_affinity__{target.name}"
+                    aev_pose_records = [
+                        item
+                        for item in molecule_records
+                        if target.name in item.get("aev_pose_blocks", {})
+                    ]
+                    if aev_pose_records:
+                        winner = max(
+                            aev_pose_records,
+                            key=lambda item: float(item["scores"][aev_objective]),
+                        )
+                        record["aev_pose_blocks"][target.name] = winner[
+                            "aev_pose_blocks"
+                        ][target.name]
+                        record["aev_targets"][target.name] = winner["targets"][target.name]
+                        record["aev_pose_amsrs"][target.name] = winner.get(
+                            "aev_pose_amsrs", {}
+                        ).get(target.name, winner["amsr"])
             aggregated.append(record)
         return aggregated
 
@@ -1066,41 +1115,73 @@ class BoxDockingObjectives(Objectives):
     ) -> None:
         directory = Path(directory)
         for target in self.config.targets:
-            output = directory / f"{target.name}.sdf"
-            pose_records = [record for record in records if target.name in record["pose_blocks"]]
-            if not pose_records:
-                output.unlink(missing_ok=True)
-                continue
-            temporary = output.with_suffix(".sdf.tmp")
-            writer = Chem.SDWriter(str(temporary))
-            try:
-                for record in pose_records:
-                    mol = Chem.MolFromMolBlock(record["pose_blocks"][target.name], removeHs=False)
-                    if mol is None:
-                        continue
-                    mol.SetProp("_Name", record["name"])
-                    mol.SetProp(
-                        "AMSR",
-                        record.get("pose_amsrs", {}).get(target.name, record["amsr"]),
-                    )
-                    mol.SetProp("SMILES", record["smiles"])
-                    mol.SetProp("docking_target", target.name)
-                    if "conformer_count" in record:
-                        mol.SetProp("evaluated_conformer_count", str(record["conformer_count"]))
-                    for objective_name, value in record["scores"].items():
-                        mol.SetProp(objective_name, str(value))
-                    for key, value in record["targets"][target.name].items():
-                        if value is not None:
-                            encoded = (
-                                json.dumps(value, sort_keys=True)
-                                if isinstance(value, dict)
-                                else value
-                            )
-                            mol.SetProp(f"selected_pose_{key}", str(encoded))
-                    writer.write(mol)
-            finally:
-                writer.close()
-            os.replace(temporary, output)
+            self._write_pose_sdf(
+                directory / f"{target.name}.sdf",
+                records,
+                target_name=target.name,
+                blocks_key="pose_blocks",
+                metadata_key="targets",
+                amsrs_key="pose_amsrs",
+                selection_method="gnina_cnn_affinity",
+            )
+            if self.config.aev_plig_dir is not None:
+                self._write_pose_sdf(
+                    directory / f"{target.name}__aev_plig.sdf",
+                    records,
+                    target_name=target.name,
+                    blocks_key="aev_pose_blocks",
+                    metadata_key="aev_targets",
+                    amsrs_key="aev_pose_amsrs",
+                    selection_method="aev_plig_affinity",
+                )
+
+    @staticmethod
+    def _write_pose_sdf(
+        output: Path,
+        records: list[dict[str, Any]],
+        *,
+        target_name: str,
+        blocks_key: str,
+        metadata_key: str,
+        amsrs_key: str,
+        selection_method: str,
+    ) -> None:
+        pose_records = [
+            record for record in records if target_name in record.get(blocks_key, {})
+        ]
+        if not pose_records:
+            output.unlink(missing_ok=True)
+            return
+        temporary = output.with_suffix(".sdf.tmp")
+        writer = Chem.SDWriter(str(temporary))
+        try:
+            for record in pose_records:
+                mol = Chem.MolFromMolBlock(record[blocks_key][target_name], removeHs=False)
+                if mol is None:
+                    continue
+                mol.SetProp("_Name", record["name"])
+                mol.SetProp(
+                    "AMSR",
+                    record.get(amsrs_key, {}).get(target_name, record["amsr"]),
+                )
+                mol.SetProp("SMILES", record["smiles"])
+                mol.SetProp("docking_target", target_name)
+                mol.SetProp("pose_selection_method", selection_method)
+                if "conformer_count" in record:
+                    mol.SetProp("evaluated_conformer_count", str(record["conformer_count"]))
+                for objective_name, value in record["scores"].items():
+                    mol.SetProp(objective_name, str(value))
+                metadata = record.get(metadata_key, record["targets"])[target_name]
+                for key, value in metadata.items():
+                    if value is not None:
+                        encoded = (
+                            json.dumps(value, sort_keys=True) if isinstance(value, dict) else value
+                        )
+                        mol.SetProp(f"selected_pose_{key}", str(encoded))
+                writer.write(mol)
+        finally:
+            writer.close()
+        os.replace(temporary, output)
 
     def _write_progress(
         self, score_records: list[dict[str, Any]], accepted: list[dict[str, Any]]

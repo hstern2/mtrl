@@ -175,6 +175,8 @@ def test_rl_chooses_and_records_random_seed(tmp_path, monkeypatch) -> None:
     assert received["save_final_checkpoint"] is False
     assert received["resume_training_state"] is False
     run_config = json.loads((output / "run_config.json").read_text())
+    assert json.loads((output / "scoring_config.json").read_text())["protonation_filter"] is True
+    assert run_config["protonation_filter"] is True
     assert run_config["seed"] == 8675309
     assert run_config["warmup_steps"] == 100
     assert run_config["save_final_checkpoint"] is False
@@ -306,7 +308,6 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
             "--muegge-filter",
             "--brenk-filter",
             "--pfizer-3-75-filter",
-            "--protonation-filter",
             "--max-protonation-variants",
             "6",
             "--max-br-sascore",
@@ -457,7 +458,6 @@ def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -
             "5",
             "--max-clogp",
             "4",
-            "--protonation-filter",
             "--max-protonation-variants",
             "5",
             "--output-dir",
@@ -483,3 +483,18 @@ def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -
     assert received["config"].protonation_filter is True
     assert received["config"].max_protonation_variants == 5
     assert '"retained_molecules": 1' in result.stdout
+
+    disabled = CliRunner().invoke(
+        app,
+        [
+            "score",
+            str(molecules),
+            "--docking-targets",
+            str(targets),
+            "--no-protonation-filter",
+            "--output-dir",
+            str(tmp_path / "scored_without_protonation_filter"),
+        ],
+    )
+    assert disabled.exit_code == 0
+    assert received["config"].protonation_filter is False

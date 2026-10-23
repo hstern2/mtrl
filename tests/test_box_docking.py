@@ -129,7 +129,12 @@ def test_best_affinity_is_selected_only_from_posebusters_passing_poses(tmp_path)
         poses.append(pose)
     _write_many(output, poses)
 
-    result = BoxDockingPipeline._select_passing_pose("q_open", output, center=(1.0, 2.0, 3.0))
+    result = BoxDockingPipeline._select_passing_pose(
+        "q_open",
+        output,
+        center=(1.0, 2.0, 3.0),
+        retain_passing_poses=True,
+    )
 
     assert result.accepted
     assert result.cnn_affinity == pytest.approx(7.5)
@@ -141,6 +146,49 @@ def test_best_affinity_is_selected_only_from_posebusters_passing_poses(tmp_path)
     assert result.n_poses == 3
     assert result.n_passing_poses == 2
     assert result.posebusters_failures == {"volume_overlap_with_protein": 1}
+    assert [pose.GetIntProp("_mtrl_pose_index") for pose in result.passing_poses] == [2, 3]
+
+
+def test_aev_plig_rescores_all_passing_poses_and_selects_its_own_best(tmp_path) -> None:
+    target = _targets(tmp_path)[0]
+    first = _mol3d("CCO")
+    first.SetIntProp("_mtrl_pose_index", 2)
+    second = _mol3d("CCO")
+    second.SetIntProp("_mtrl_pose_index", 5)
+    target_result = TargetDockingScore(
+        target_name=target.name,
+        cnn_affinity=8.0,
+        pose_index=2,
+        accepted=True,
+        pose=Chem.Mol(first),
+        passing_poses=[first, second],
+    )
+    result = BoxDockingScore(targets={target.name: target_result}, accepted=True)
+    config = BoxScoringConfig(
+        targets=(target,),
+        output_dir=tmp_path / "out",
+        aev_plig_dir=tmp_path / "AEV-PLIG",
+    )
+
+    with (
+        patch.object(BoxScoringConfig, "validate"),
+        patch("mtrl.scoring.gnina.require"),
+        patch("mtrl.scoring.busters.require"),
+        patch(
+            "mtrl.scoring.AEVPligScorer.score",
+            return_value={"m0_t0_p2": 6.1, "m0_t0_p5": 7.4},
+        ) as score,
+    ):
+        pipeline = BoxDockingPipeline(config)
+        pipeline._apply_aev_plig([result])
+
+    assert score.call_count == 1
+    assert target_result.cnn_affinity == 8.0
+    assert target_result.pose_index == 2
+    assert target_result.aev_plig_affinity == pytest.approx(7.4)
+    assert target_result.aev_plig_pose_index == 5
+    assert target_result.aev_plig_pose is not None
+    assert not target_result.passing_poses
 
 
 def test_full_docking_command_uses_explicit_box_without_minimize(tmp_path) -> None:
@@ -585,6 +633,58 @@ def test_box_rewards_use_all_target_affinities_as_pareto_axes(tmp_path) -> None:
     assert all(rewards[index] > rewards[3] for index in range(3))
 
 
+def test_aev_plig_adds_one_objective_and_pose_file_per_target(tmp_path) -> None:
+    targets = _targets(tmp_path)
+    cnn_pose = _mol3d("CCO")
+    aev_pose = _mol3d("CCO")
+    result = BoxDockingScore(
+        targets={
+            target.name: TargetDockingScore(
+                target_name=target.name,
+                cnn_affinity=6.0 + index,
+                aev_plig_affinity=7.0 + index,
+                pose_index=1,
+                aev_plig_pose_index=2,
+                accepted=True,
+                pose=Chem.Mol(cnn_pose),
+                aev_plig_pose=Chem.Mol(aev_pose),
+            )
+            for index, target in enumerate(targets)
+        },
+        accepted=True,
+    )
+    suite = BoxDockingObjectives(
+        BoxScoringConfig(
+            targets=targets,
+            output_dir=tmp_path / "out",
+            aev_plig_dir=tmp_path / "AEV-PLIG",
+        ),
+        decode_fn=lambda _: DecodedAMSR(Chem.MolFromSmiles("CCO"), {}),
+        conformer_fn=lambda _: cnn_pose,
+        pipeline=FakeBoxPipeline(result),
+    )
+
+    scored = suite.evaluate([["candidate"]])[0]
+
+    assert list(scored.scores) == [
+        "gnina_cnn_affinity__q_open",
+        "gnina_cnn_affinity__c_open",
+        "gnina_cnn_affinity__r_open",
+        "aev_plig_affinity__q_open",
+        "aev_plig_affinity__c_open",
+        "aev_plig_affinity__r_open",
+    ]
+    assert scored.scores["aev_plig_affinity__r_open"] == pytest.approx(9.0)
+    overall = tmp_path / "out" / "best" / "overall"
+    assert (overall / "q_open.sdf").is_file()
+    aev_output = overall / "q_open__aev_plig.sdf"
+    assert aev_output.is_file()
+    output_pose = next(
+        mol for mol in Chem.SDMolSupplier(str(aev_output), removeHs=False) if mol is not None
+    )
+    assert output_pose.GetProp("pose_selection_method") == "aev_plig_affinity"
+
+
 def test_box_objectives_limit_distinct_conformers_before_scoring(tmp_path) -> None:
     targets = _targets(tmp_path)
     pose = _mol3d()
@@ -699,6 +799,37 @@ def test_molecule_pareto_record_keeps_each_targets_best_conformer(tmp_path) -> N
         "r_open": "conformer-a",
     }
     assert front[0]["conformer_count"] == 2
+
+
+def test_molecule_record_tracks_separate_cnn_and_aev_pose_conformers(tmp_path) -> None:
+    target = _targets(tmp_path)[0]
+    suite = BoxDockingObjectives(
+        BoxScoringConfig(
+            targets=(target,),
+            output_dir=tmp_path / "out",
+            max_conformers_per_molecule=2,
+            aev_plig_dir=tmp_path / "AEV-PLIG",
+        ),
+        pipeline=FakeBoxPipeline(BoxDockingScore()),
+    )
+    cnn_name, aev_name = [objective.name for objective in suite.objectives]
+
+    def record(amsr, cnn, aev):
+        return {
+            "name": amsr,
+            "amsr": amsr,
+            "smiles": "CCO",
+            "scores": {cnn_name: cnn, aev_name: aev},
+            "targets": {target.name: {"accepted": True}},
+            "pose_blocks": {target.name: f"cnn-{amsr}"},
+            "aev_pose_blocks": {target.name: f"aev-{amsr}"},
+        }
+
+    front = suite._pareto_front([record("conformer-a", 8.0, 6.0), record("conformer-b", 7.0, 9.0)])
+
+    assert len(front) == 1
+    assert front[0]["pose_amsrs"][target.name] == "conformer-a"
+    assert front[0]["aev_pose_amsrs"][target.name] == "conformer-b"
 
 
 def test_qed_is_an_optional_independent_box_objective(tmp_path) -> None:
