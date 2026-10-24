@@ -1,6 +1,5 @@
 import json
 
-import pytest
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
@@ -45,7 +44,7 @@ def test_score_reports_aev_plig_as_an_independent_target_objective(tmp_path) -> 
         aev_plig_dir=tmp_path / "AEV-PLIG",
     )
 
-    assert _objective_scores(result, config, Chem.MolFromSmiles("CCO")) == {
+    assert _objective_scores(result, config) == {
         "gnina_cnn_affinity__site_a": 6.2,
         "aev_plig_affinity__site_a": 7.1,
     }
@@ -107,7 +106,6 @@ def test_score_sdf_keeps_partial_hits_and_writes_only_real_poses(tmp_path) -> No
         output_dir=tmp_path / "scored",
         target_failure_score=-1.0,
         accept_targets="any",
-        qed_objective=True,
     )
 
     summary = score_sdf(input_sdf, config, pipeline=FakePipeline(result))
@@ -120,7 +118,6 @@ def test_score_sdf_keeps_partial_hits_and_writes_only_real_poses(tmp_path) -> No
     assert record["objectives"] == {
         "gnina_cnn_affinity__site_a": 6.75,
         "gnina_cnn_affinity__site_b": -1.0,
-        "qed": pytest.approx(0.5832, abs=1e-4),
     }
     assert record["targets"]["site_a"]["rigid_vina_affinity"] == -6.1
     assert record["targets"]["site_a"]["rigid_conformer_rmsd"] == 0.002
@@ -235,7 +232,9 @@ def test_score_sdf_applies_explicit_clogp_gate_before_docking(tmp_path) -> None:
     )
     pipeline = FakePipeline(result)
     config = BoxScoringConfig(
-        targets=(target,), output_dir=tmp_path / "scored", max_clogp=4.0,
+        targets=(target,),
+        output_dir=tmp_path / "scored",
+        max_clogp=4.0,
         protonation_filter=False,
     )
 

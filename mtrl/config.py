@@ -12,8 +12,8 @@ from typing import Any, Literal
 CONFIG_ENV = "MTRL_SCORING_CONFIG"
 _TARGET_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 TargetAcceptance = Literal["any", "all"]
-DockingMode = Literal["flexible", "rigid", "rigid-refine"]
 PoseBustersConfig = Literal["dock", "dock-fast"]
+UniDockSearchMode = Literal["fast", "balance", "detail"]
 
 
 @dataclass(frozen=True)
@@ -24,7 +24,6 @@ class DockingTarget:
     receptor_pdb: Path
     center: tuple[float, float, float]
     size: tuple[float, float, float]
-    exhaustiveness: int = 8
     num_modes: int = 9
 
     def validate(self) -> None:
@@ -42,8 +41,6 @@ class DockingTarget:
             raise ValueError(
                 f"docking target {self.name!r} size must contain three positive numbers"
             )
-        if self.exhaustiveness <= 0:
-            raise ValueError(f"docking target {self.name!r} exhaustiveness must be > 0")
         if self.num_modes <= 0:
             raise ValueError(f"docking target {self.name!r} num_modes must be > 0")
 
@@ -53,7 +50,6 @@ class DockingTarget:
             "receptor_pdb": str(self.receptor_pdb),
             "center": list(self.center),
             "size": list(self.size),
-            "exhaustiveness": self.exhaustiveness,
             "num_modes": self.num_modes,
         }
 
@@ -77,16 +73,12 @@ class DockingTarget:
             receptor = base_dir / receptor
         center = _numeric_triplet(values["center"], target_name=name, field="center")
         size = _numeric_triplet(values["size"], target_name=name, field="size")
-        exhaustiveness = _positive_int(
-            values.get("exhaustiveness", 8), target_name=name, field="exhaustiveness"
-        )
         num_modes = _positive_int(values.get("num_modes", 9), target_name=name, field="num_modes")
         target = cls(
             name=name,
             receptor_pdb=receptor.resolve(),
             center=center,
             size=size,
-            exhaustiveness=exhaustiveness,
             num_modes=num_modes,
         )
         target.validate()
@@ -187,7 +179,7 @@ class ScoringConfig:
 
 @dataclass(frozen=True)
 class BoxScoringConfig:
-    """Configuration for independent full-docking objectives."""
+    """Configuration for independent rigid-placement docking objectives."""
 
     targets: tuple[DockingTarget, ...]
     output_dir: Path
@@ -199,10 +191,12 @@ class BoxScoringConfig:
     evaluation_workers: int = 1
     target_failure_score: float = 0.0
     accept_targets: TargetAcceptance = "any"
-    docking_mode: DockingMode = "flexible"
+    unidock_executable: str = "unidock"
+    unidock_search_mode: UniDockSearchMode = "fast"
+    unidock_seed: int = 42
+    unidock_timeout_seconds: int = 600
     gnina_cpu: int | None = None
     gnina_timeout_seconds: int = 600
-    qed_objective: bool = False
     posebusters_config: PoseBustersConfig = "dock"
     posebusters_timeout_seconds: int = 600
     muegge_filter: bool = False
@@ -242,8 +236,14 @@ class BoxScoringConfig:
             raise ValueError("target_failure_score must be finite")
         if self.accept_targets not in {"any", "all"}:
             raise ValueError("accept_targets must be 'any' or 'all'")
-        if self.docking_mode not in {"flexible", "rigid", "rigid-refine"}:
-            raise ValueError("docking_mode must be 'flexible', 'rigid', or 'rigid-refine'")
+        if not self.unidock_executable:
+            raise ValueError("unidock_executable must not be empty")
+        if self.unidock_search_mode not in {"fast", "balance", "detail"}:
+            raise ValueError("unidock_search_mode must be 'fast', 'balance', or 'detail'")
+        if self.unidock_seed < 0:
+            raise ValueError("unidock_seed must be >= 0")
+        if self.unidock_timeout_seconds <= 0:
+            raise ValueError("unidock_timeout_seconds must be > 0")
         if self.gnina_cpu is not None and self.gnina_cpu <= 0:
             raise ValueError("gnina_cpu must be > 0")
         if self.gnina_timeout_seconds <= 0:
@@ -299,10 +299,12 @@ class BoxScoringConfig:
             "evaluation_workers": self.evaluation_workers,
             "target_failure_score": self.target_failure_score,
             "accept_targets": self.accept_targets,
-            "docking_mode": self.docking_mode,
+            "unidock_executable": self.unidock_executable,
+            "unidock_search_mode": self.unidock_search_mode,
+            "unidock_seed": self.unidock_seed,
+            "unidock_timeout_seconds": self.unidock_timeout_seconds,
             "gnina_cpu": self.gnina_cpu,
             "gnina_timeout_seconds": self.gnina_timeout_seconds,
-            "qed_objective": self.qed_objective,
             "posebusters_config": self.posebusters_config,
             "posebusters_timeout_seconds": self.posebusters_timeout_seconds,
             "aev_plig_dir": str(self.aev_plig_dir) if self.aev_plig_dir is not None else None,

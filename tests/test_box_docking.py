@@ -60,7 +60,6 @@ def test_target_manifest_loads_relative_receptors(tmp_path) -> None:
                         "receptor_pdb": "receptor.pdb",
                         "center": [1, 2, 3],
                         "size": [20, 21, 22],
-                        "exhaustiveness": 4,
                         "num_modes": 5,
                     }
                 ]
@@ -73,7 +72,6 @@ def test_target_manifest_loads_relative_receptors(tmp_path) -> None:
     assert target.receptor_pdb == receptor.resolve()
     assert target.center == (1.0, 2.0, 3.0)
     assert target.size == (20.0, 21.0, 22.0)
-    assert target.exhaustiveness == 4
     assert target.num_modes == 5
 
 
@@ -83,7 +81,6 @@ def test_target_manifest_loads_relative_receptors(tmp_path) -> None:
         ({"name": 7}, "name must be a string"),
         ({"center": "123"}, "center must be an array of three numbers"),
         ({"size": [20, True, 20]}, "size must be an array of three numbers"),
-        ({"exhaustiveness": 2.5}, "exhaustiveness must be a positive integer"),
         ({"num_modes": 0}, "num_modes must be a positive integer"),
     ],
 )
@@ -191,42 +188,9 @@ def test_aev_plig_rescores_all_passing_poses_and_selects_its_own_best(tmp_path) 
     assert not target_result.passing_poses
 
 
-def test_full_docking_command_uses_explicit_box_without_minimize(tmp_path) -> None:
-    target = _targets(tmp_path)[0]
-    config = BoxScoringConfig(targets=(target,), output_dir=tmp_path / "out")
-    ligand = tmp_path / "ligand.sdf"
-    output = tmp_path / "output.sdf"
-    _write_many(ligand, [_mol3d()])
-    seen = {}
-
-    def fake_run(command, **kwargs):
-        seen["command"] = command
-        output.write_text("$$$$\n")
-        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-
-    with (
-        patch("mtrl.scoring.gnina.require"),
-        patch("mtrl.scoring.busters.require"),
-        patch("mtrl.scoring.subprocess.run", side_effect=fake_run),
-    ):
-        pipeline = BoxDockingPipeline(config)
-        pipeline._run_gnina(target, ligand, output)
-
-    command = seen["command"]
-    assert "--center_x" in command
-    assert "--size_z" in command
-    assert "--num_modes" in command
-    assert "--minimize" not in command
-    assert "--autobox_ligand" not in command
-
-
 def test_rigid_pdbqt_has_single_root_and_no_torsions(tmp_path) -> None:
     target = _targets(tmp_path)[0]
-    config = BoxScoringConfig(
-        targets=(target,),
-        output_dir=tmp_path / "out",
-        docking_mode="rigid-refine",
-    )
+    config = BoxScoringConfig(targets=(target,), output_dir=tmp_path / "out")
     ligand = tmp_path / "ligand.sdf"
     output = tmp_path / "ligand_rigid.pdbqt"
     _write_many(ligand, [_mol3d()])
@@ -263,93 +227,178 @@ def test_rigid_pdbqt_has_single_root_and_no_torsions(tmp_path) -> None:
     assert "TORSDOF 1" not in rigid_pdbqt
 
 
-def test_rigid_refine_commands_disable_cnn_then_minimize_and_rescore(tmp_path) -> None:
+def test_unidock_batches_ligands_in_explicit_box(tmp_path) -> None:
     target = _targets(tmp_path)[0]
     config = BoxScoringConfig(
         targets=(target,),
         output_dir=tmp_path / "out",
-        docking_mode="rigid-refine",
-        gnina_cpu=1,
-        gnina_timeout_seconds=123,
+        unidock_executable="unidock-custom",
+        unidock_search_mode="fast",
+        unidock_seed=17,
+        unidock_timeout_seconds=123,
     )
-    ligand = tmp_path / "ligand.pdbqt"
-    rigid_output = tmp_path / "rigid.sdf"
-    refined_input = tmp_path / "rigid_pose.sdf"
-    refined_output = tmp_path / "refined.sdf"
-    commands = []
+    ligands = [tmp_path / "a.pdbqt", tmp_path / "b.pdbqt"]
+    output = tmp_path / "poses"
+    output.mkdir()
+    receptor_pdbqt = tmp_path / "receptor.pdbqt"
+    receptor_pdbqt.touch()
+    seen = {}
 
     def fake_run(command, **kwargs):
-        commands.append(command)
+        seen["command"] = command
         assert kwargs["timeout"] == 123
-        Path(command[command.index("--out") + 1]).write_text("$$$$\n")
         return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
     with (
         patch("mtrl.scoring.gnina.require"),
         patch("mtrl.scoring.busters.require"),
-        patch("mtrl.scoring.shutil.which", return_value="/usr/bin/obabel"),
+        patch("mtrl.scoring.shutil.which", return_value="/tools/unidock"),
         patch("mtrl.scoring.subprocess.run", side_effect=fake_run),
+        patch.object(BoxDockingPipeline, "_prepare_receptor", return_value=receptor_pdbqt),
     ):
         pipeline = BoxDockingPipeline(config)
-        pipeline._run_gnina(target, ligand, rigid_output, cnn_scoring="none")
-        pipeline._run_gnina_minimize(target, refined_input, refined_output)
+        pipeline._run_unidock(target, ligands, output)
 
-    rigid_command, refine_command = commands
-    assert rigid_command[rigid_command.index("--cnn_scoring") + 1] == "none"
-    assert rigid_command[rigid_command.index("--pose_sort_order") + 1] == "Energy"
-    assert rigid_command[rigid_command.index("--cpu") + 1] == "1"
-    assert "--minimize" not in rigid_command
-    assert "--center_x" in rigid_command
-    assert "--minimize" in refine_command
-    assert refine_command[refine_command.index("--cnn_scoring") + 1] == "rescore"
-    assert refine_command[refine_command.index("--cpu") + 1] == "1"
-    assert "--autobox_ligand" not in refine_command
-    assert "--center_x" in refine_command
+    command = seen["command"]
+    assert command[0] == "/tools/unidock"
+    batch_index = command.index("--gpu_batch")
+    assert command[batch_index + 1 : batch_index + 3] == [str(path) for path in ligands]
+    assert command[command.index("--receptor") + 1] == str(receptor_pdbqt)
+    assert command[command.index("--search_mode") + 1] == "fast"
+    assert command[command.index("--seed") + 1] == "17"
+    assert command[command.index("--energy_range") + 1] == "100"
+    assert "--center_x" in command
+    assert "--size_z" in command
+    assert command[command.index("--num_modes") + 1] == str(target.num_modes)
 
 
-@pytest.mark.parametrize(
-    ("minimize", "message"),
-    [(False, "gnina exceeded"), (True, "gnina --minimize exceeded")],
-)
-def test_gnina_timeout_reports_the_failed_stage(tmp_path, minimize, message) -> None:
-    target = _targets(tmp_path)[0]
-    config = BoxScoringConfig(
-        targets=(target,),
-        output_dir=tmp_path / "out",
-        gnina_timeout_seconds=2,
-    )
-    ligand = tmp_path / "ligand.sdf"
-    output = tmp_path / "output.sdf"
+def test_score_batch_runs_unidock_once_per_target(tmp_path) -> None:
+    targets = _targets(tmp_path)
+    config = BoxScoringConfig(targets=targets, output_dir=tmp_path / "out")
+
+    def prepare_ligand(_self, _input, output):
+        output.write_text("TORSDOF 0\n")
+
+    def convert_pose(_self, template, _input, output):
+        _write_many(output, [template])
+
+    def refine(task):
+        index, target, _molecule, _rigid_sdf, _refined_sdf = task
+        return (
+            index,
+            target.name,
+            TargetDockingScore(target_name=target.name, cnn_affinity=6.0, accepted=True),
+        )
 
     with (
         patch("mtrl.scoring.gnina.require"),
         patch("mtrl.scoring.busters.require"),
-        patch(
-            "mtrl.scoring.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(["gnina"], 2),
-        ),
+        patch.object(BoxDockingPipeline, "_prepare_rigid_ligand", prepare_ligand),
+        patch.object(BoxDockingPipeline, "_run_unidock") as run_unidock,
+        patch.object(BoxDockingPipeline, "_unidock_poses_to_sdf", convert_pose),
+        patch.object(BoxDockingPipeline, "_refine_and_check", side_effect=refine),
     ):
-        pipeline = BoxDockingPipeline(config)
-        with pytest.raises(RuntimeError, match=message):
-            if minimize:
-                pipeline._run_gnina_minimize(target, ligand, output)
-            else:
-                pipeline._run_gnina(target, ligand, output)
+        results = BoxDockingPipeline(config, workers=1).score_batch([_mol3d(), _mol3d("CCN")])
+
+    assert run_unidock.call_count == len(targets)
+    assert all(len(call.args[1]) == 2 for call in run_unidock.call_args_list)
+    assert all(result.accepted for result in results)
 
 
-def test_rigid_poses_are_refined_in_one_batch_and_annotated(tmp_path) -> None:
+def test_unidock_timeout_is_bounded(tmp_path) -> None:
     target = _targets(tmp_path)[0]
     config = BoxScoringConfig(
         targets=(target,),
         output_dir=tmp_path / "out",
-        docking_mode="rigid-refine",
+        unidock_timeout_seconds=2,
     )
+    ligand = tmp_path / "ligand.pdbqt"
+    output = tmp_path / "output"
+    output.mkdir()
+
+    with (
+        patch("mtrl.scoring.gnina.require"),
+        patch("mtrl.scoring.busters.require"),
+        patch("mtrl.scoring.shutil.which", return_value="/tools/unidock"),
+        patch.object(
+            BoxDockingPipeline, "_prepare_receptor", return_value=tmp_path / "receptor.pdbqt"
+        ),
+        patch(
+            "mtrl.scoring.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(["unidock"], 2),
+        ),
+    ):
+        pipeline = BoxDockingPipeline(config)
+        with pytest.raises(RuntimeError, match="Uni-Dock exceeded its 2-second timeout"):
+            pipeline._run_unidock(target, [ligand], output)
+
+
+def test_unidock_output_uses_original_topology_and_coordinates(tmp_path) -> None:
+    template = _mol3d("CO")
+    pdbqt = tmp_path / "poses.pdbqt"
+    sdf = tmp_path / "poses.sdf"
+    lines = ["MODEL 1", "REMARK VINA RESULT:    -5.750      0.000      0.000"]
+    conformer = template.GetConformer()
+    for atom in template.GetAtoms():
+        index = atom.GetIdx()
+        position = conformer.GetAtomPosition(index)
+        lines.append(
+            f"ATOM  {index + 1:5d}  {atom.GetSymbol():<2}  UNL     1    "
+            f"{position.x + 4:8.3f}{position.y - 2:8.3f}{position.z + 1:8.3f}"
+            "  0.00  0.00    +0.000 C"
+        )
+    lines.append("ENDMDL")
+    pdbqt.write_text("\n".join(lines) + "\n")
+
+    BoxDockingPipeline._unidock_poses_to_sdf(template, pdbqt, sdf)
+
+    pose = next(mol for mol in Chem.SDMolSupplier(str(sdf), removeHs=False) if mol is not None)
+    assert Chem.MolToSmiles(pose) == Chem.MolToSmiles(template)
+    assert pose.GetDoubleProp("rigid_vina_affinity") == pytest.approx(-5.75)
+    assert pose.GetDoubleProp("rigid_conformer_rmsd") < 0.002
+    assert pose.GetConformer().GetAtomPosition(0).x == pytest.approx(
+        template.GetConformer().GetAtomPosition(0).x + 4, abs=0.001
+    )
+
+
+def test_gnina_minimizes_and_rescores_unidock_poses(tmp_path) -> None:
+    target = _targets(tmp_path)[0]
+    config = BoxScoringConfig(
+        targets=(target,), output_dir=tmp_path / "out", gnina_cpu=1, gnina_timeout_seconds=123
+    )
+    ligand = tmp_path / "rigid.sdf"
+    output = tmp_path / "refined.sdf"
+    seen = {}
+
+    def fake_run(command, **kwargs):
+        seen["command"] = command
+        assert kwargs["timeout"] == 123
+        output.write_text("$$$$\n")
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    with (
+        patch("mtrl.scoring.gnina.require"),
+        patch("mtrl.scoring.busters.require"),
+        patch("mtrl.scoring.subprocess.run", side_effect=fake_run),
+    ):
+        BoxDockingPipeline(config)._run_gnina_minimize(target, ligand, output)
+
+    command = seen["command"]
+    assert "--minimize" in command
+    assert command[command.index("--cnn_scoring") + 1] == "rescore"
+    assert command[command.index("--cpu") + 1] == "1"
+    assert "--center_x" in command
+
+
+def test_rigid_poses_are_refined_in_one_batch_and_annotated(tmp_path) -> None:
+    target = _targets(tmp_path)[0]
+    config = BoxScoringConfig(targets=(target,), output_dir=tmp_path / "out")
     decoded = _mol3d("CCCO")
     rigid_output = tmp_path / "rigid.sdf"
     refined_output = tmp_path / "refined.sdf"
     rigid_poses = [Chem.Mol(decoded), Chem.Mol(decoded)]
-    rigid_poses[0].SetProp("minimizedAffinity", "-5.1")
-    rigid_poses[1].SetProp("minimizedAffinity", "-4.8")
+    rigid_poses[0].SetProp("rigid_vina_affinity", "-5.1")
+    rigid_poses[1].SetProp("rigid_vina_affinity", "-4.8")
     _write_many(rigid_output, rigid_poses)
 
     def fake_minimize(target_arg, ligand_arg, output_arg):
@@ -385,14 +434,16 @@ def test_rigid_poses_are_refined_in_one_batch_and_annotated(tmp_path) -> None:
     assert refined[0].GetDoubleProp("refined_conformer_rmsd") < 0.01
 
 
-def test_box_config_round_trips_rigid_refine_mode(tmp_path, monkeypatch) -> None:
+def test_box_config_round_trips_unidock_settings(tmp_path, monkeypatch) -> None:
     config = BoxScoringConfig(
         targets=(_targets(tmp_path)[0],),
         output_dir=tmp_path / "out",
-        docking_mode="rigid-refine",
+        unidock_executable="/tools/unidock",
+        unidock_search_mode="balance",
+        unidock_seed=91,
+        unidock_timeout_seconds=222,
         gnina_cpu=2,
         gnina_timeout_seconds=321,
-        qed_objective=True,
         rdkit_druglike_filter=True,
         muegge_filter=True,
         brenk_filter=True,
@@ -407,10 +458,12 @@ def test_box_config_round_trips_rigid_refine_mode(tmp_path, monkeypatch) -> None
     monkeypatch.setenv(CONFIG_ENV, json.dumps(config.to_dict()))
     restored = BoxScoringConfig.from_env()
 
-    assert restored.docking_mode == "rigid-refine"
+    assert restored.unidock_executable == "/tools/unidock"
+    assert restored.unidock_search_mode == "balance"
+    assert restored.unidock_seed == 91
+    assert restored.unidock_timeout_seconds == 222
     assert restored.gnina_cpu == 2
     assert restored.gnina_timeout_seconds == 321
-    assert restored.qed_objective is True
     assert restored.rdkit_druglike_filter is True
     assert restored.muegge_filter is True
     assert restored.brenk_filter is True
@@ -469,28 +522,29 @@ def test_pipeline_target_acceptance_policy(tmp_path, accept_targets, expected) -
         output_dir=tmp_path / "out",
         accept_targets=accept_targets,
     )
-    passing = TargetDockingScore(
-        target_name="q_open",
-        cnn_affinity=6.0,
-        accepted=True,
-        pose=_mol3d(),
-    )
-    failed = TargetDockingScore(
-        target_name="failed",
-        rejection_reason="PoseBusters failed for every docking pose",
-    )
     with (
         patch("mtrl.scoring.gnina.require"),
         patch("mtrl.scoring.busters.require"),
-        patch.object(BoxDockingPipeline, "_run_gnina"),
-        patch.object(BoxDockingPipeline, "_run_posebusters"),
-        patch.object(
-            BoxDockingPipeline,
-            "_select_passing_pose",
-            side_effect=[passing, failed, failed],
-        ),
     ):
-        result = BoxDockingPipeline(config)._score_one(_mol3d(), "candidate")
+        pipeline = BoxDockingPipeline(config)
+        result = pipeline._finish_score(
+            {
+                "q_open": TargetDockingScore(
+                    target_name="q_open",
+                    cnn_affinity=6.0,
+                    accepted=True,
+                    pose=_mol3d(),
+                ),
+                "c_open": TargetDockingScore(
+                    target_name="c_open",
+                    rejection_reason="PoseBusters failed for every docking pose",
+                ),
+                "r_open": TargetDockingScore(
+                    target_name="r_open",
+                    rejection_reason="PoseBusters failed for every docking pose",
+                ),
+            }
+        )
 
     assert result.accepted is expected
 
@@ -835,66 +889,6 @@ def test_molecule_record_tracks_separate_cnn_and_aev_pose_conformers(tmp_path) -
     assert len(front) == 1
     assert front[0]["pose_amsrs"][target.name] == "conformer-a"
     assert front[0]["aev_pose_amsrs"][target.name] == "conformer-b"
-
-
-def test_qed_is_an_optional_independent_box_objective(tmp_path) -> None:
-    targets = _targets(tmp_path)
-    pose = _mol3d()
-    decoded = DecodedAMSR(Chem.MolFromSmiles("CCO"), {})
-    result = BoxDockingScore(
-        targets={
-            target.name: TargetDockingScore(
-                target_name=target.name,
-                cnn_affinity=5.0,
-                accepted=True,
-                pose=Chem.Mol(pose),
-            )
-            for target in targets
-        },
-        accepted=True,
-    )
-    suite = BoxDockingObjectives(
-        BoxScoringConfig(
-            targets=targets,
-            output_dir=tmp_path / "out",
-            qed_objective=True,
-        ),
-        decode_fn=lambda _: decoded,
-        conformer_fn=lambda _: pose,
-        pipeline=FakeBoxPipeline(result),
-    )
-
-    scored = suite.evaluate([["candidate"]])[0]
-
-    assert [objective.name for objective in suite.objectives] == [
-        "gnina_cnn_affinity__q_open",
-        "gnina_cnn_affinity__c_open",
-        "gnina_cnn_affinity__r_open",
-        "qed",
-    ]
-    assert scored.scores["qed"] == pytest.approx(0.4068, abs=1e-4)
-    record = json.loads((tmp_path / "out" / "scores.jsonl").read_text())
-    assert record["objectives"]["qed"] == pytest.approx(0.4068, abs=1e-4)
-
-
-def test_qed_changes_four_objective_pareto_reward(tmp_path) -> None:
-    suite = BoxDockingObjectives(
-        BoxScoringConfig(
-            targets=_targets(tmp_path),
-            output_dir=tmp_path / "out",
-            qed_objective=True,
-        ),
-        pipeline=FakeBoxPipeline(BoxDockingScore()),
-    )
-    names = [objective.name for objective in suite.objectives]
-    scored = [
-        ScoredItem(token_ids=[], scores=dict(zip(names, values, strict=True)))
-        for values in ((5.0, 5.0, 5.0, 0.8), (5.0, 5.0, 5.0, 0.2))
-    ]
-
-    rewards = suite.get_rewards(scored)
-
-    assert rewards[0] > rewards[1]
 
 
 def test_additional_objectives_receive_one_batch_of_molecules_and_poses(tmp_path) -> None:

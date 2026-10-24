@@ -46,8 +46,10 @@ not generate replacement conformers.
 
 ### Install
 
-GNINA must be available in `PATH`. Rigid docking additionally requires Open
-Babel's `obabel`; the optional medchem filter requires LillyMol.
+GNINA and Open Babel's `obabel` must be available in `PATH`; the optional
+medchem filter requires LillyMol. Explicit-box scoring also requires Uni-Dock
+1.x (for example, `conda install -c conda-forge unidock`). Its executable may
+be outside `PATH` when supplied with `--unidock-executable`.
 
 ```bash
 uv sync
@@ -89,10 +91,9 @@ are removed after each molecule. External-tool chatter is hidden unless
 
 ## Explicit-box, multi-receptor docking and RL
 
-Full GNINA docking without a reference ligand is configured with a JSON target
-manifest. Each entry is one inseparable receptor/box specification and becomes
-one independently maximized `CNNaffinity` objective. Optional AEV-PLIG
-rescoring adds a second objective for every target:
+Docking without a reference ligand is configured with a JSON target manifest.
+Each receptor/box pair becomes one independently maximized `CNNaffinity`
+objective. Optional AEV-PLIG rescoring adds a second objective per target:
 
 ```json
 {
@@ -102,7 +103,6 @@ rescoring adds a second objective for every target:
       "receptor_pdb": "receptors/site_a_open_1.pdb",
       "center": [4.108, 21.909, -18.092],
       "size": [23.8, 23.8, 23.8],
-      "exhaustiveness": 8,
       "num_modes": 9
     }
   ]
@@ -117,7 +117,7 @@ uv run mtrl validate-targets targets.json
 
 CUDA_VISIBLE_DEVICES=0 uv run mtrl score molecules.sdf \
   --docking-targets targets.json \
-  --docking-mode rigid-refine \
+  --unidock-executable /path/to/unidock \
   --gnina-timeout-seconds 600 \
   --posebusters-timeout-seconds 600 \
   --posebusters-config dock-fast \
@@ -134,7 +134,7 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl score molecules.sdf \
 
 CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
   --docking-targets targets.json \
-  --docking-mode rigid-refine \
+  --unidock-executable /path/to/unidock \
   --gnina-timeout-seconds 600 \
   --posebusters-timeout-seconds 600 \
   --posebusters-config dock-fast \
@@ -193,18 +193,20 @@ than 75 Å².
 `--max-br-sascore 5` applies the published USPTO/eMolecules BR-SAScore, on which
 1 is easiest and 10 is hardest. Lilly Medchem Rules remains an independent
 structural-alert gate. `--max-clogp 4` independently rejects molecules whose
-RDKit cLogP exceeds 4. GNINA performs a full search in every configured box.
-Every returned pose is checked with the receptor-aware PoseBusters docking
-configuration, and each scoring method uses its highest score among that
-target's passing poses. A molecule is retained when at least one target has a
-passing pose. Targets without a passing pose get the configurable failure score
-(`0.0` by default); no pose is fabricated for them. Selected valid poses are
-written under each generation and cumulative-front directory. The
-reference-aligned minimization workflow above remains available unchanged.
+RDKit cLogP exceeds 4.
 
-`--gnina-cpu N` bounds the CPU threads used by each GNINA process. This is useful
-when `--evaluation-workers` runs many independent ligands concurrently; omitting
-it preserves GNINA's default thread selection.
+For each target, mtrl sends the whole scoring batch to Uni-Dock in one GPU call.
+The input conformers are rigid (`TORSDOF 0`), so Uni-Dock searches only rotation
+and translation. GNINA then locally minimizes and CNN-rescores every pose.
+PoseBusters checks every refined pose, and each objective uses its highest score
+among the passing poses. A molecule is retained when at least one target has a
+passing pose. Failed targets receive the configured failure score (`0.0` by
+default). Selected poses retain the Uni-Dock Vina score and conformer RMSDs
+before and after GNINA refinement.
+
+`--unidock-search-mode` selects Uni-Dock's `fast`, `balance`, or `detail` preset;
+`fast` is the default. `--evaluation-workers` controls concurrent GNINA
+refinement/PoseBusters tasks, and `--gnina-cpu N` bounds each GNINA process.
 
 For RL, `--max-conformers-per-molecule N` groups candidates by canonical
 isomeric SMILES and docks at most `N` distinct emitted AMSR conformers of each
@@ -219,13 +221,13 @@ score. Omitting the option preserves the original conformer-level behavior.
 Progress reports include unique-molecule and Bemis–Murcko scaffold counts and
 the largest molecule and scaffold shares, both before and after scoring gates.
 
-`mtrl score` applies the same target loading, molecule filters, full docking,
+`mtrl score` applies the same target loading, molecule filters, docking,
 PoseBusters checks, target acceptance policy, and failed-target score without
 sampling or training a model. Its input SDF must contain 3D coordinates. It
 writes `scores.jsonl`, `summary.json`, `scoring_config.json`, and selected-pose
 SDFs under `poses/`. `mtrl validate-targets` resolves relative receptor paths and
-validates all names, files, centers, box sizes, exhaustiveness values, and mode
-counts without invoking external scoring tools.
+validates all names, files, centers, box sizes, and mode counts without invoking
+external scoring tools.
 
 The Python API can add molecular objectives without changing the docking
 pipeline. Pass `Objective` instances through
@@ -241,21 +243,9 @@ For each selected pose, `scores.jsonl` and the output SDF metadata also record
 centroid to that target's configured box center. This supports calibration and
 auditing of site attribution when padded search boxes overlap.
 
-`--docking-mode rigid-refine` preserves the input conformer during global
-placement. Open Babel writes a rigid PDBQT torsion tree (`TORSDOF 0`), and GNINA
-searches translations and rotations with `--cnn_scoring none`. Each rigid pose
-is then independently passed through GNINA `--minimize --cnn_scoring rescore`.
-PoseBusters gates the resulting refined poses, and the highest refined
-`CNNaffinity` among passing poses supplies that target's objective. Reports also
-include the rigid-stage Vina affinity, the rigid pose's conformer RMSD from the
-input, and the refined pose's conformer RMSD. `flexible` remains the default for
-backwards compatibility; `rigid` performs rigid placement with CNN rescoring but
-no minimization.
-
-`--gnina-timeout-seconds` bounds each individual docking or minimization
-subprocess. A timeout fails only that receptor/box evaluation, allowing long
-multi-target and distributed runs to continue instead of waiting indefinitely
-on a pathological ligand.
+`--unidock-timeout-seconds` bounds each batched placement call;
+`--gnina-timeout-seconds` bounds each local refinement. A timeout fails that
+target evaluation without blocking the full run.
 
 `--posebusters-timeout-seconds` similarly bounds each receptor-aware
 PoseBusters evaluation. PoseBusters still gates every final refined pose; a
@@ -266,7 +256,3 @@ ring, receptor-distance, clash, and volume-overlap checks while omitting its
 ETKDG-based energy-ratio module. This avoids generating a second conformer
 ensemble when the input conformer came from another model. The default is
 `dock`, preserving the complete standard PoseBusters configuration.
-
-`--qed-objective` adds RDKit QED as another independently maximized Pareto
-axis. It is calculated from the decoded molecule without generating another
-conformer. The option is off by default for backwards compatibility.

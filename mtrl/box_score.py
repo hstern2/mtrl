@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from rdkit import Chem
-from rdkit.Chem import QED, Mol
+from rdkit.Chem import Mol
 
 from mtrl.config import BoxScoringConfig
 from mtrl.lilly import LillyMedchemFilter
@@ -14,9 +14,7 @@ from mtrl.protonation import ProtonationFilter
 from mtrl.scoring import BoxDockingPipeline, BoxDockingScore
 
 
-def _objective_scores(
-    result: BoxDockingScore, config: BoxScoringConfig, mol: Mol
-) -> dict[str, float]:
+def _objective_scores(result: BoxDockingScore, config: BoxScoringConfig) -> dict[str, float]:
     scores = {}
     for target in config.targets:
         target_result = result.targets[target.name]
@@ -33,8 +31,6 @@ def _objective_scores(
                 else config.target_failure_score
             )
             scores[f"aev_plig_affinity__{target.name}"] = aev_value
-    if config.qed_objective:
-        scores["qed"] = float(QED.qed(Chem.RemoveHs(mol)))
     return scores
 
 
@@ -165,7 +161,7 @@ def score_sdf(
         record = records[record_index]
         record["accepted"] = result.accepted
         record["rejection_reason"] = result.rejection_reason
-        record["objectives"] = _objective_scores(result, config, mol)
+        record["objectives"] = _objective_scores(result, config)
         record["targets"] = {
             name: target_result.to_record() for name, target_result in result.targets.items()
         }

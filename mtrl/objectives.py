@@ -13,7 +13,7 @@ from typing import Any, Protocol, TypeVar
 import numpy as np
 import torch
 from rdkit import Chem
-from rdkit.Chem import QED, Mol
+from rdkit.Chem import Mol
 from rdkit.Chem.Scaffolds import MurckoScaffold
 from trl.objectives.base import Objective, Objectives, ScoredItem
 from trl.objectives.pareto import nsga2_sort
@@ -252,16 +252,6 @@ class BoxAEVPligObjective(Objective):
             affinity = result.aev_plig_affinity if result.accepted else None
             scores.append(float(affinity) if affinity is not None else self.failure_score)
         return scores
-
-
-class QEDObjective(Objective):
-    """RDKit quantitative estimate of drug-likeness."""
-
-    def __init__(self) -> None:
-        super().__init__(name="qed", direction="maximize")
-
-    def score_batch(self, items: list[Any]) -> list[float]:
-        return [float(QED.qed(item.molecule)) for item in items]
 
 
 class DockingObjectives(Objectives):
@@ -752,8 +742,6 @@ class BoxDockingObjectives(Objectives):
                 BoxAEVPligObjective(target.name, config.target_failure_score)
                 for target in config.targets
             )
-        if config.qed_objective:
-            objectives.append(QEDObjective())
         if additional_objectives:
             objectives.extend(additional_objectives)
         super().__init__(objectives=objectives, decode_fn=decode_fn)
@@ -1085,9 +1073,9 @@ class BoxDockingObjectives(Objectives):
                             aev_pose_records,
                             key=lambda item: float(item["scores"][aev_objective]),
                         )
-                        record["aev_pose_blocks"][target.name] = winner[
-                            "aev_pose_blocks"
-                        ][target.name]
+                        record["aev_pose_blocks"][target.name] = winner["aev_pose_blocks"][
+                            target.name
+                        ]
                         record["aev_targets"][target.name] = winner["targets"][target.name]
                         record["aev_pose_amsrs"][target.name] = winner.get(
                             "aev_pose_amsrs", {}
@@ -1146,9 +1134,7 @@ class BoxDockingObjectives(Objectives):
         amsrs_key: str,
         selection_method: str,
     ) -> None:
-        pose_records = [
-            record for record in records if target_name in record.get(blocks_key, {})
-        ]
+        pose_records = [record for record in records if target_name in record.get(blocks_key, {})]
         if not pose_records:
             output.unlink(missing_ok=True)
             return

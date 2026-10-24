@@ -51,7 +51,7 @@ def test_rl_help_explains_training_and_output_options() -> None:
         "regularization",
         "GNINA's",
         "minimization box",
-        "Worker processes used concurrently",
+        "Concurrent AMSR conformer construction",
         "Final RL iteration",
         "Restore optimizer",
         "Peak AdamW",
@@ -320,8 +320,14 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
             "-1.5",
             "--accept-targets",
             "all",
-            "--docking-mode",
-            "rigid-refine",
+            "--unidock-executable",
+            "/tools/unidock",
+            "--unidock-search-mode",
+            "balance",
+            "--unidock-seed",
+            "17",
+            "--unidock-timeout-seconds",
+            "240",
             "--gnina-cpu",
             "1",
             "--gnina-timeout-seconds",
@@ -330,7 +336,6 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
             "90",
             "--posebusters-config",
             "dock-fast",
-            "--qed-objective",
             "--output-dir",
             str(output),
             "--iterations",
@@ -357,12 +362,14 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
     assert scoring_config["max_conformers_per_molecule"] == 3
     assert scoring_config["target_failure_score"] == -1.5
     assert scoring_config["accept_targets"] == "all"
-    assert scoring_config["docking_mode"] == "rigid-refine"
+    assert scoring_config["unidock_executable"] == "/tools/unidock"
+    assert scoring_config["unidock_search_mode"] == "balance"
+    assert scoring_config["unidock_seed"] == 17
+    assert scoring_config["unidock_timeout_seconds"] == 240
     assert scoring_config["gnina_cpu"] == 1
     assert scoring_config["gnina_timeout_seconds"] == 300
     assert scoring_config["posebusters_timeout_seconds"] == 90
     assert scoring_config["posebusters_config"] == "dock-fast"
-    assert scoring_config["qed_objective"] is True
     run_config = json.loads((output / "run_config.json").read_text())
     assert run_config["rdkit_druglike_filter"] is True
     assert run_config["muegge_filter"] is True
@@ -444,8 +451,14 @@ def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -
             "-2",
             "--accept-targets",
             "any",
-            "--docking-mode",
-            "rigid-refine",
+            "--unidock-executable",
+            "/tools/unidock",
+            "--unidock-search-mode",
+            "detail",
+            "--unidock-seed",
+            "23",
+            "--unidock-timeout-seconds",
+            "240",
             "--gnina-cpu",
             "1",
             "--gnina-timeout-seconds",
@@ -454,7 +467,6 @@ def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -
             "90",
             "--posebusters-config",
             "dock-fast",
-            "--qed-objective",
             "--rdkit-druglike-filter",
             "--muegge-filter",
             "--brenk-filter",
@@ -474,12 +486,14 @@ def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -
     assert received["input_sdf"] == molecules.resolve()
     assert received["config"].target_failure_score == -2.0
     assert received["config"].accept_targets == "any"
-    assert received["config"].docking_mode == "rigid-refine"
+    assert received["config"].unidock_executable == "/tools/unidock"
+    assert received["config"].unidock_search_mode == "detail"
+    assert received["config"].unidock_seed == 23
+    assert received["config"].unidock_timeout_seconds == 240
     assert received["config"].gnina_cpu == 1
     assert received["config"].gnina_timeout_seconds == 300
     assert received["config"].posebusters_timeout_seconds == 90
     assert received["config"].posebusters_config == "dock-fast"
-    assert received["config"].qed_objective is True
     assert received["config"].rdkit_druglike_filter is True
     assert received["config"].muegge_filter is True
     assert received["config"].brenk_filter is True

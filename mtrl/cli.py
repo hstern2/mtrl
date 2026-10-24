@@ -45,8 +45,7 @@ def validate_targets(
     for target in targets:
         typer.echo(
             f"{target.name}: receptor={target.receptor_pdb} "
-            f"center={target.center} size={target.size} "
-            f"exhaustiveness={target.exhaustiveness} num_modes={target.num_modes}"
+            f"center={target.center} size={target.size} num_modes={target.num_modes}"
         )
 
 
@@ -80,13 +79,25 @@ def score(
         "--accept-targets",
         help="Retain a molecule when 'any' or 'all' targets have a valid pose",
     ),
-    docking_mode: str = typer.Option(
-        "flexible",
-        "--docking-mode",
-        help=(
-            "Docking workflow: 'flexible', 'rigid', or 'rigid-refine' "
-            "(rigid placement without CNN scoring, then GNINA minimization/rescoring)"
-        ),
+    unidock_executable: str = typer.Option(
+        "unidock",
+        "--unidock-executable",
+        help="Uni-Dock command name or path",
+    ),
+    unidock_search_mode: str = typer.Option(
+        "fast",
+        "--unidock-search-mode",
+        help="Uni-Dock search mode: 'fast', 'balance', or 'detail'",
+    ),
+    unidock_seed: int = typer.Option(
+        42,
+        "--unidock-seed",
+        help="Uni-Dock random seed",
+    ),
+    unidock_timeout_seconds: int = typer.Option(
+        600,
+        "--unidock-timeout-seconds",
+        help="Maximum wall time for each batched Uni-Dock call",
     ),
     gnina_cpu: int | None = typer.Option(
         None,
@@ -96,7 +107,7 @@ def score(
     gnina_timeout_seconds: int = typer.Option(
         600,
         "--gnina-timeout-seconds",
-        help="Maximum wall time for each GNINA docking or minimization call",
+        help="Maximum wall time for each GNINA local-refinement call",
     ),
     posebusters_timeout_seconds: int = typer.Option(
         600,
@@ -107,11 +118,6 @@ def score(
         "dock",
         "--posebusters-config",
         help="PoseBusters checks: 'dock' or 'dock-fast' (omits ETKDG energy ratio)",
-    ),
-    qed_objective: bool = typer.Option(
-        False,
-        "--qed-objective/--no-qed-objective",
-        help="Include RDKit QED in reported objective scores",
     ),
     aev_plig_dir: Path | None = typer.Option(
         None,
@@ -145,7 +151,7 @@ def score(
     evaluation_workers: int = typer.Option(
         _CLI_EVALUATION_WORKERS,
         "--evaluation-workers",
-        help="Worker processes used concurrently for GNINA and PoseBusters",
+        help="Concurrent GNINA-refinement and PoseBusters tasks",
     ),
     rdkit_druglike_filter: bool = typer.Option(
         False,
@@ -206,14 +212,20 @@ def score(
     from mtrl.box_score import score_sdf
     from mtrl.config import (
         BoxScoringConfig,
-        DockingMode,
         PoseBustersConfig,
         TargetAcceptance,
+        UniDockSearchMode,
         load_docking_targets,
     )
 
     if evaluation_workers <= 0:
         raise typer.BadParameter("--evaluation-workers must be > 0")
+    if unidock_timeout_seconds <= 0:
+        raise typer.BadParameter("--unidock-timeout-seconds must be > 0")
+    if unidock_seed < 0:
+        raise typer.BadParameter("--unidock-seed must be >= 0")
+    if unidock_search_mode not in {"fast", "balance", "detail"}:
+        raise typer.BadParameter("--unidock-search-mode must be 'fast', 'balance', or 'detail'")
     if gnina_cpu is not None and gnina_cpu <= 0:
         raise typer.BadParameter("--gnina-cpu must be > 0")
     if aev_plig_workers <= 0:
@@ -228,8 +240,6 @@ def score(
         raise typer.BadParameter("--posebusters-config must be 'dock' or 'dock-fast'")
     if accept_targets not in {"any", "all"}:
         raise typer.BadParameter("--accept-targets must be 'any' or 'all'")
-    if docking_mode not in {"flexible", "rigid", "rigid-refine"}:
-        raise typer.BadParameter("--docking-mode must be 'flexible', 'rigid', or 'rigid-refine'")
     if not math.isfinite(target_failure_score):
         raise typer.BadParameter("--target-failure-score must be finite")
     if max_br_sascore is not None and (
@@ -259,16 +269,16 @@ def score(
             evaluation_workers=evaluation_workers,
             target_failure_score=target_failure_score,
             accept_targets=cast(TargetAcceptance, accept_targets),
-            docking_mode=cast(DockingMode, docking_mode),
+            unidock_executable=unidock_executable,
+            unidock_search_mode=cast(UniDockSearchMode, unidock_search_mode),
+            unidock_seed=unidock_seed,
+            unidock_timeout_seconds=unidock_timeout_seconds,
             gnina_cpu=gnina_cpu,
             gnina_timeout_seconds=gnina_timeout_seconds,
-            qed_objective=qed_objective,
             posebusters_config=cast(PoseBustersConfig, posebusters_config),
             posebusters_timeout_seconds=posebusters_timeout_seconds,
             aev_plig_dir=aev_plig_dir.resolve() if aev_plig_dir is not None else None,
-            aev_plig_python=(
-                aev_plig_python.resolve() if aev_plig_python is not None else None
-            ),
+            aev_plig_python=(aev_plig_python.resolve() if aev_plig_python is not None else None),
             aev_plig_model=aev_plig_model,
             aev_plig_workers=aev_plig_workers,
             aev_plig_timeout_seconds=aev_plig_timeout_seconds,
@@ -438,7 +448,7 @@ def rl(
         dir_okay=False,
         help=(
             "JSON file containing named receptor/center/size targets; each target "
-            "becomes an independent full-docking CNNaffinity objective"
+            "becomes an independent CNNaffinity objective"
         ),
         rich_help_panel="Scoring inputs",
     ),
@@ -454,13 +464,28 @@ def rl(
         help="Box mode: retain a molecule when 'any' or 'all' targets have a valid pose",
         rich_help_panel="Scoring inputs",
     ),
-    docking_mode: str = typer.Option(
-        "flexible",
-        "--docking-mode",
-        help=(
-            "Box mode: 'flexible', 'rigid', or 'rigid-refine' (rigid placement "
-            "without CNN scoring, then GNINA minimization/rescoring)"
-        ),
+    unidock_executable: str = typer.Option(
+        "unidock",
+        "--unidock-executable",
+        help="Box mode: Uni-Dock command name or path",
+        rich_help_panel="Scoring inputs",
+    ),
+    unidock_search_mode: str = typer.Option(
+        "fast",
+        "--unidock-search-mode",
+        help="Box mode: Uni-Dock search mode ('fast', 'balance', or 'detail')",
+        rich_help_panel="Scoring inputs",
+    ),
+    unidock_seed: int = typer.Option(
+        42,
+        "--unidock-seed",
+        help="Box mode: Uni-Dock random seed",
+        rich_help_panel="Scoring inputs",
+    ),
+    unidock_timeout_seconds: int = typer.Option(
+        600,
+        "--unidock-timeout-seconds",
+        help="Box mode: maximum wall time for each batched Uni-Dock call",
         rich_help_panel="Scoring inputs",
     ),
     gnina_cpu: int | None = typer.Option(
@@ -472,7 +497,7 @@ def rl(
     gnina_timeout_seconds: int = typer.Option(
         600,
         "--gnina-timeout-seconds",
-        help="Box mode: maximum wall time for each GNINA docking or minimization call",
+        help="Box mode: maximum wall time for each GNINA local-refinement call",
         rich_help_panel="Scoring inputs",
     ),
     posebusters_timeout_seconds: int = typer.Option(
@@ -485,12 +510,6 @@ def rl(
         "dock",
         "--posebusters-config",
         help="Box mode: 'dock' or 'dock-fast' (omits ETKDG energy ratio)",
-        rich_help_panel="Scoring inputs",
-    ),
-    qed_objective: bool = typer.Option(
-        False,
-        "--qed-objective/--no-qed-objective",
-        help="Box mode: add RDKit QED as an independent Pareto objective",
         rich_help_panel="Scoring inputs",
     ),
     aev_plig_dir: Path | None = typer.Option(
@@ -539,10 +558,7 @@ def rl(
     evaluation_workers: int = typer.Option(
         _CLI_EVALUATION_WORKERS,
         "--evaluation-workers",
-        help=(
-            "Worker processes used concurrently for AMSR conformer construction, "
-            "GNINA evaluation, and PoseBusters"
-        ),
+        help=("Concurrent AMSR conformer construction, GNINA refinement, and PoseBusters tasks"),
         rich_help_panel="Parallel evaluation",
     ),
     rdkit_druglike_filter: bool = typer.Option(
@@ -757,10 +773,10 @@ def rl(
 
     from mtrl.config import (
         BoxScoringConfig,
-        DockingMode,
         PoseBustersConfig,
         ScoringConfig,
         TargetAcceptance,
+        UniDockSearchMode,
         load_docking_targets,
     )
 
@@ -772,6 +788,7 @@ def rl(
         ("--temperature-final", temperature_final),
         ("--log-every", log_every),
         ("--evaluation-workers", evaluation_workers),
+        ("--unidock-timeout-seconds", unidock_timeout_seconds),
         ("--gnina-timeout-seconds", gnina_timeout_seconds),
         ("--posebusters-timeout-seconds", posebusters_timeout_seconds),
         ("--aev-plig-workers", aev_plig_workers),
@@ -781,6 +798,10 @@ def rl(
             raise typer.BadParameter(f"{name} must be > 0")
     if gnina_cpu is not None and gnina_cpu <= 0:
         raise typer.BadParameter("--gnina-cpu must be > 0")
+    if unidock_seed < 0:
+        raise typer.BadParameter("--unidock-seed must be >= 0")
+    if unidock_search_mode not in {"fast", "balance", "detail"}:
+        raise typer.BadParameter("--unidock-search-mode must be 'fast', 'balance', or 'detail'")
     for name, value in (
         ("--kl-beta", kl_beta),
         ("--pareto-lambda", pareto_lambda),
@@ -801,8 +822,6 @@ def rl(
         raise typer.BadParameter("--seed must be in [0, 2^63)")
     if accept_targets not in {"any", "all"}:
         raise typer.BadParameter("--accept-targets must be 'any' or 'all'")
-    if docking_mode not in {"flexible", "rigid", "rigid-refine"}:
-        raise typer.BadParameter("--docking-mode must be 'flexible', 'rigid', or 'rigid-refine'")
     if posebusters_config not in {"dock", "dock-fast"}:
         raise typer.BadParameter("--posebusters-config must be 'dock' or 'dock-fast'")
     if not math.isfinite(target_failure_score):
@@ -880,17 +899,17 @@ def rl(
             evaluation_workers=evaluation_workers,
             target_failure_score=target_failure_score,
             accept_targets=cast(TargetAcceptance, accept_targets),
-            docking_mode=cast(DockingMode, docking_mode),
+            unidock_executable=unidock_executable,
+            unidock_search_mode=cast(UniDockSearchMode, unidock_search_mode),
+            unidock_seed=unidock_seed,
+            unidock_timeout_seconds=unidock_timeout_seconds,
             gnina_cpu=gnina_cpu,
             gnina_timeout_seconds=gnina_timeout_seconds,
-            qed_objective=qed_objective,
             posebusters_config=cast(PoseBustersConfig, posebusters_config),
             posebusters_timeout_seconds=posebusters_timeout_seconds,
             max_conformers_per_molecule=max_conformers_per_molecule,
             aev_plig_dir=aev_plig_dir.resolve() if aev_plig_dir is not None else None,
-            aev_plig_python=(
-                aev_plig_python.resolve() if aev_plig_python is not None else None
-            ),
+            aev_plig_python=(aev_plig_python.resolve() if aev_plig_python is not None else None),
             aev_plig_model=aev_plig_model,
             aev_plig_workers=aev_plig_workers,
             aev_plig_timeout_seconds=aev_plig_timeout_seconds,
@@ -937,7 +956,16 @@ def rl(
                     "accept_targets": accept_targets if docking_targets is not None else None,
                     "checkpoint": str(checkpoint.resolve()),
                     "checkpoint_every": checkpoint_every,
-                    "docking_mode": docking_mode if docking_targets is not None else None,
+                    "unidock_executable": (
+                        unidock_executable if docking_targets is not None else None
+                    ),
+                    "unidock_search_mode": (
+                        unidock_search_mode if docking_targets is not None else None
+                    ),
+                    "unidock_seed": unidock_seed if docking_targets is not None else None,
+                    "unidock_timeout_seconds": (
+                        unidock_timeout_seconds if docking_targets is not None else None
+                    ),
                     "evaluation_workers": evaluation_workers,
                     "gnina_cpu": gnina_cpu if docking_targets is not None else None,
                     "gnina_timeout_seconds": (
@@ -949,7 +977,6 @@ def rl(
                     "posebusters_config": (
                         posebusters_config if docking_targets is not None else None
                     ),
-                    "qed_objective": qed_objective if docking_targets is not None else None,
                     "aev_plig_dir": (
                         str(aev_plig_dir.resolve())
                         if docking_targets is not None and aev_plig_dir is not None

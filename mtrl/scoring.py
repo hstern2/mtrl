@@ -8,7 +8,7 @@ import subprocess
 import sys
 from collections import Counter
 from collections.abc import Iterator
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass, field
 from multiprocessing import get_context
@@ -37,7 +37,6 @@ class StructureScore:
 
 
 _WORKER_PIPELINE: StructureScoringPipeline | None = None
-_BOX_WORKER_PIPELINE: BoxDockingPipeline | None = None
 
 
 def _initialize_scoring_worker(config: ScoringConfig) -> None:
@@ -62,26 +61,8 @@ def _evaluate_decoded_in_worker(
     return conformer, _WORKER_PIPELINE._score_one(conformer, name)
 
 
-def _initialize_box_scoring_worker(config: BoxScoringConfig) -> None:
-    global _BOX_WORKER_PIPELINE
-    _BOX_WORKER_PIPELINE = BoxDockingPipeline(config, workers=1)
-
-
-def _score_mol_in_box_worker(mol: Mol, name: str) -> BoxDockingScore:
-    if _BOX_WORKER_PIPELINE is None:
-        raise RuntimeError("box-docking worker was not initialized")
-    return _BOX_WORKER_PIPELINE._score_one(mol, name)
-
-
-def _evaluate_decoded_in_box_worker(
-    decoded: DecodedAMSR, name: str
-) -> tuple[Mol | None, BoxDockingScore]:
-    if _BOX_WORKER_PIPELINE is None:
-        raise RuntimeError("box-docking worker was not initialized")
-    conformer = make_conformer(decoded)
-    if conformer is None:
-        return None, BoxDockingScore(rejection_reason="AMSR conformer construction failed")
-    return conformer, _BOX_WORKER_PIPELINE._score_one(conformer, name)
+def _make_conformer_in_worker(decoded: DecodedAMSR) -> Mol | None:
+    return make_conformer(decoded)
 
 
 def minimized_pose_rmsd(aligned: Mol, minimized: Mol) -> float:
@@ -405,8 +386,15 @@ def _float_property(properties: dict, *names: str) -> float | None:
     return None
 
 
+@dataclass(frozen=True)
+class _PreparedLigand:
+    name: str
+    molecule: Mol
+    pdbqt: Path
+
+
 class BoxDockingPipeline:
-    """GNINA box docking with optional rigid placement and PoseBusters gating."""
+    """Batched Uni-Dock placement, GNINA refinement, and PoseBusters gating."""
 
     def __init__(self, config: BoxScoringConfig, *, workers: int | None = None) -> None:
         config.validate()
@@ -415,22 +403,17 @@ class BoxDockingPipeline:
         self.local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         self.batch_number = 0
         self.workers = config.evaluation_workers if workers is None else workers
-        self._pool: ProcessPoolExecutor | None = None
+        self._conformer_pool: ProcessPoolExecutor | None = None
+        self._receptor_directory = TemporaryDirectory(prefix=f"mtrl_receptors_r{self.rank}_")
+        self._prepared_receptors: dict[str, Path] = {}
         gnina.require()
         busters.require()
-        if config.docking_mode in {"rigid", "rigid-refine"} and shutil.which("obabel") is None:
-            raise RuntimeError("rigid docking requires the Open Babel `obabel` executable")
 
     def score_batch(self, mols: list[Mol]) -> list[BoxDockingScore]:
         batch_number = self.batch_number
         self.batch_number += 1
         names = [f"r{self.rank}_b{batch_number}_m{i}" for i in range(len(mols))]
-        if self.workers == 1 or len(mols) <= 1:
-            results = [self._score_one(mol, name) for mol, name in zip(mols, names, strict=True)]
-        else:
-            results = list(self._executor().map(_score_mol_in_box_worker, mols, names))
-        self._apply_aev_plig(results)
-        return results
+        return self._score_prepared_batch(mols, names)
 
     def evaluate_decoded_batch(
         self, candidates: list[DecodedAMSR]
@@ -439,22 +422,145 @@ class BoxDockingPipeline:
         self.batch_number += 1
         names = [f"r{self.rank}_b{batch_number}_m{i}" for i in range(len(candidates))]
         if self.workers == 1 or len(candidates) <= 1:
-            results: list[tuple[Mol | None, BoxDockingScore]] = []
-            for candidate, name in zip(candidates, names, strict=True):
-                conformer = make_conformer(candidate)
-                if conformer is None:
-                    results.append(
-                        (
-                            None,
-                            BoxDockingScore(rejection_reason="AMSR conformer construction failed"),
-                        )
-                    )
-                else:
-                    results.append((conformer, self._score_one(conformer, name)))
+            conformers = [make_conformer(candidate) for candidate in candidates]
         else:
-            results = list(self._executor().map(_evaluate_decoded_in_box_worker, candidates, names))
-        self._apply_aev_plig([score for _, score in results])
+            conformers = list(self._conformer_executor().map(_make_conformer_in_worker, candidates))
+        valid_indices = [index for index, mol in enumerate(conformers) if mol is not None]
+        valid_mols = [conformers[index] for index in valid_indices]
+        valid_names = [names[index] for index in valid_indices]
+        valid_scores = self._score_prepared_batch(
+            [mol for mol in valid_mols if mol is not None], valid_names
+        )
+        by_index = dict(zip(valid_indices, valid_scores, strict=True))
+        results = []
+        for index, conformer in enumerate(conformers):
+            score = by_index.get(
+                index,
+                BoxDockingScore(rejection_reason="AMSR conformer construction failed"),
+            )
+            results.append((conformer, score))
         return results
+
+    def _score_prepared_batch(self, mols: list[Mol], names: list[str]) -> list[BoxDockingScore]:
+        if not mols:
+            return []
+        target_results: list[dict[str, TargetDockingScore]] = [{} for _ in mols]
+        prepared: list[tuple[int, _PreparedLigand]] = []
+        with TemporaryDirectory(prefix=f"mtrl_box_r{self.rank}_") as temporary:
+            work = Path(temporary)
+            for index, (mol, name) in enumerate(zip(mols, names, strict=True)):
+                if mol.GetNumConformers() == 0 or not mol.GetConformer().Is3D():
+                    reason = "AMSR conformer is missing 3D coordinates"
+                    self._set_all_target_failures(target_results[index], reason)
+                    continue
+                try:
+                    molecule = Chem.AddHs(Chem.Mol(mol), addCoords=True)
+                    ligand_sdf = work / f"{name}.sdf"
+                    ligand_pdbqt = work / f"{name}.pdbqt"
+                    _write_mol(ligand_sdf, molecule, name)
+                    self._prepare_rigid_ligand(ligand_sdf, ligand_pdbqt)
+                    prepared.append((index, _PreparedLigand(name, molecule, ligand_pdbqt)))
+                except Exception as error:
+                    reason = f"ligand preparation failed: {type(error).__name__}: {error}"
+                    self._set_all_target_failures(target_results[index], reason)
+
+            refinement_tasks: list[tuple[int, DockingTarget, Mol, Path, Path]] = []
+            for target in self.config.targets:
+                target_work = work / target.name
+                target_work.mkdir()
+                output_dir = target_work / "unidock"
+                output_dir.mkdir()
+                try:
+                    self._run_unidock(
+                        target,
+                        [ligand.pdbqt for _, ligand in prepared],
+                        output_dir,
+                    )
+                except Exception as error:
+                    reason = f"docking failed: {type(error).__name__}: {error}"
+                    for index, _ in prepared:
+                        target_results[index][target.name] = TargetDockingScore(
+                            target_name=target.name, rejection_reason=reason
+                        )
+                    continue
+
+                for index, ligand in prepared:
+                    unidock_output = output_dir / f"{ligand.pdbqt.stem}_out.pdbqt"
+                    rigid_sdf = target_work / f"{ligand.name}_rigid.sdf"
+                    refined_sdf = target_work / f"{ligand.name}_refined.sdf"
+                    try:
+                        self._unidock_poses_to_sdf(ligand.molecule, unidock_output, rigid_sdf)
+                    except Exception as error:
+                        target_results[index][target.name] = TargetDockingScore(
+                            target_name=target.name,
+                            rejection_reason=(f"docking failed: {type(error).__name__}: {error}"),
+                        )
+                        continue
+                    refinement_tasks.append(
+                        (index, target, ligand.molecule, rigid_sdf, refined_sdf)
+                    )
+
+            if self.workers == 1 or len(refinement_tasks) <= 1:
+                refined_results = list(map(self._refine_and_check, refinement_tasks))
+            else:
+                with ThreadPoolExecutor(max_workers=self.workers) as pool:
+                    refined_results = list(pool.map(self._refine_and_check, refinement_tasks))
+            for index, target_name, result in refined_results:
+                target_results[index][target_name] = result
+
+        results = [self._finish_score(scores) for scores in target_results]
+        self._apply_aev_plig(results)
+        return results
+
+    def _set_all_target_failures(self, results: dict[str, TargetDockingScore], reason: str) -> None:
+        for target in self.config.targets:
+            results[target.name] = TargetDockingScore(
+                target_name=target.name, rejection_reason=reason
+            )
+
+    def _finish_score(self, target_results: dict[str, TargetDockingScore]) -> BoxDockingScore:
+        for target in self.config.targets:
+            target_results.setdefault(
+                target.name,
+                TargetDockingScore(target_name=target.name, rejection_reason="docking failed"),
+            )
+        failures = [
+            f"{name}: {result.rejection_reason}"
+            for name, result in target_results.items()
+            if not result.accepted
+        ]
+        target_acceptance = [result.accepted for result in target_results.values()]
+        accepted = (
+            any(target_acceptance)
+            if self.config.accept_targets == "any"
+            else all(target_acceptance)
+        )
+        return BoxDockingScore(
+            targets=target_results,
+            accepted=accepted,
+            rejection_reason="" if accepted else "; ".join(failures),
+        )
+
+    def _refine_and_check(
+        self, task: tuple[int, DockingTarget, Mol, Path, Path]
+    ) -> tuple[int, str, TargetDockingScore]:
+        index, target, molecule, rigid_sdf, refined_sdf = task
+        try:
+            self._refine_rigid_poses(target, molecule, rigid_sdf, refined_sdf)
+            self._run_posebusters(target.receptor_pdb, refined_sdf)
+            result = self._select_passing_pose(
+                target.name,
+                refined_sdf,
+                center=target.center,
+                quiet=not self.config.verbose_tools,
+                retain_passing_poses=self.config.aev_plig_dir is not None,
+            )
+        except Exception as error:
+            result = TargetDockingScore(
+                target_name=target.name,
+                rejection_reason=f"docking failed: {type(error).__name__}: {error}",
+            )
+        return index, target.name, result
 
     def _apply_aev_plig(self, results: list[BoxDockingScore]) -> None:
         if self.config.aev_plig_dir is None:
@@ -505,98 +611,24 @@ class BoxDockingPipeline:
                     )
                 target_result.passing_poses.clear()
 
-    def _executor(self) -> ProcessPoolExecutor:
-        if self._pool is None:
-            self._pool = ProcessPoolExecutor(
+    def close(self) -> None:
+        if self._conformer_pool is not None:
+            self._conformer_pool.shutdown(wait=True, cancel_futures=True)
+            self._conformer_pool = None
+        self._prepared_receptors.clear()
+        self._receptor_directory.cleanup()
+
+    def _conformer_executor(self) -> ProcessPoolExecutor:
+        if self._conformer_pool is None:
+            self._conformer_pool = ProcessPoolExecutor(
                 max_workers=self.workers,
                 mp_context=get_context("spawn"),
-                initializer=_initialize_box_scoring_worker,
-                initargs=(self.config,),
             )
-        return self._pool
-
-    def close(self) -> None:
-        if self._pool is not None:
-            self._pool.shutdown(wait=True, cancel_futures=True)
-            self._pool = None
-
-    def _score_one(self, mol: Mol, name: str) -> BoxDockingScore:
-        if mol.GetNumConformers() == 0 or not mol.GetConformer().Is3D():
-            return BoxDockingScore(rejection_reason="AMSR conformer is missing 3D coordinates")
-
-        with TemporaryDirectory(prefix=f"mtrl_box_{name}_") as temporary:
-            work = Path(temporary)
-            ligand_sdf = work / "candidate.sdf"
-            try:
-                candidate = Chem.AddHs(Chem.Mol(mol), addCoords=True)
-                _write_mol(ligand_sdf, candidate, name)
-                docking_ligand = ligand_sdf
-                if self.config.docking_mode in {"rigid", "rigid-refine"}:
-                    docking_ligand = work / "candidate_rigid.pdbqt"
-                    self._prepare_rigid_ligand(ligand_sdf, docking_ligand)
-            except Exception as error:
-                reason = f"ligand preparation failed: {type(error).__name__}: {error}"
-                return BoxDockingScore(
-                    targets={
-                        target.name: TargetDockingScore(
-                            target_name=target.name, rejection_reason=reason
-                        )
-                        for target in self.config.targets
-                    },
-                    rejection_reason=reason,
-                )
-            target_results: dict[str, TargetDockingScore] = {}
-            for target in self.config.targets:
-                output_sdf = work / f"{target.name}.sdf"
-                try:
-                    if self.config.docking_mode == "flexible":
-                        self._run_gnina(target, docking_ligand, output_sdf)
-                    else:
-                        rigid_output = work / f"{target.name}_rigid.sdf"
-                        self._run_gnina(
-                            target,
-                            docking_ligand,
-                            rigid_output,
-                            cnn_scoring=(
-                                "none" if self.config.docking_mode == "rigid-refine" else "rescore"
-                            ),
-                        )
-                        if self.config.docking_mode == "rigid-refine":
-                            self._refine_rigid_poses(target, candidate, rigid_output, output_sdf)
-                        else:
-                            self._annotate_rigid_poses(candidate, rigid_output, output_sdf)
-                    self._run_posebusters(target.receptor_pdb, output_sdf)
-                    target_results[target.name] = self._select_passing_pose(
-                        target.name,
-                        output_sdf,
-                        center=target.center,
-                        quiet=not self.config.verbose_tools,
-                        retain_passing_poses=self.config.aev_plig_dir is not None,
-                    )
-                except Exception as error:
-                    target_results[target.name] = TargetDockingScore(
-                        target_name=target.name,
-                        rejection_reason=(f"docking failed: {type(error).__name__}: {error}"),
-                    )
-
-            failures = [
-                f"{name}: {result.rejection_reason}"
-                for name, result in target_results.items()
-                if not result.accepted
-            ]
-            target_acceptance = [result.accepted for result in target_results.values()]
-            accepted = (
-                any(target_acceptance)
-                if self.config.accept_targets == "any"
-                else all(target_acceptance)
-            )
-            return BoxDockingScore(
-                targets=target_results,
-                accepted=accepted,
-                rejection_reason=("" if accepted else "; ".join(failures)),
-            )
+        return self._conformer_pool
 
     def _prepare_rigid_ligand(self, ligand_sdf: Path, output_pdbqt: Path) -> None:
+        if shutil.which("obabel") is None:
+            raise RuntimeError("Uni-Dock ligand preparation requires Open Babel's `obabel`")
         raw_pdbqt = output_pdbqt.with_name(f"{output_pdbqt.stem}_raw.pdbqt")
         command = ["obabel", str(ligand_sdf), "-O", str(raw_pdbqt), "-xr", "-xh"]
         result = subprocess.run(
@@ -625,34 +657,135 @@ class BoxDockingPipeline:
             raise RuntimeError("Open Babel rigid-PDBQT conversion produced no atoms")
         output_pdbqt.write_text("\n".join([*header, "ROOT", *atoms, "ENDROOT", "TORSDOF 0", ""]))
 
-    def _run_gnina(
-        self,
-        target: DockingTarget,
-        ligand_path: Path,
-        output_sdf: Path,
-        *,
-        cnn_scoring: str = "rescore",
-    ) -> None:
+    def _prepare_receptor(self, target: DockingTarget) -> Path:
+        cached = self._prepared_receptors.get(target.name)
+        if cached is not None:
+            return cached
+        output_base = Path(self._receptor_directory.name) / target.name
+        output_pdbqt = output_base.with_suffix(".pdbqt")
         command = [
-            "gnina",
-            "--receptor",
+            sys.executable,
+            "-m",
+            "meeko.cli.mk_prepare_receptor",
+            "--read_pdb",
             str(target.receptor_pdb),
-            "--ligand",
-            str(ligand_path),
+            "--output_basename",
+            str(output_base),
+            "--write_pdbqt",
+        ]
+        result = subprocess.run(
+            command,
+            check=False,
+            text=True,
+            capture_output=not self.config.verbose_tools,
+        )
+        if result.returncode != 0 or not output_pdbqt.is_file():
+            diagnostic = ""
+            if not self.config.verbose_tools:
+                diagnostic = f": {(result.stderr or result.stdout).strip()[-500:]}"
+            raise RuntimeError(
+                f"Meeko receptor preparation failed with exit code {result.returncode}{diagnostic}"
+            )
+        self._prepared_receptors[target.name] = output_pdbqt
+        return output_pdbqt
+
+    def _run_unidock(
+        self, target: DockingTarget, ligand_pdbqts: list[Path], output_dir: Path
+    ) -> None:
+        if not ligand_pdbqts:
+            return
+        executable = shutil.which(self.config.unidock_executable)
+        if executable is None:
+            raise RuntimeError(f"Uni-Dock executable not found: {self.config.unidock_executable}")
+        command = [
+            executable,
+            "--receptor",
+            str(self._prepare_receptor(target)),
+            "--gpu_batch",
+            *(str(path) for path in ligand_pdbqts),
             *self._box_arguments(target),
-            "--exhaustiveness",
-            str(target.exhaustiveness),
+            "--search_mode",
+            self.config.unidock_search_mode,
             "--num_modes",
             str(target.num_modes),
-            *self._gnina_cpu_arguments(),
-            "--cnn_scoring",
-            cnn_scoring,
-            "--pose_sort_order",
-            "Energy" if cnn_scoring == "none" else "CNNscore",
-            "--out",
-            str(output_sdf),
+            "--energy_range",
+            "100",
+            "--seed",
+            str(self.config.unidock_seed),
+            "--dir",
+            str(output_dir),
         ]
-        self._execute_gnina(command, output_sdf, action="gnina")
+        try:
+            result = subprocess.run(
+                command,
+                env=_gnina_environment(self.local_rank),
+                check=False,
+                text=True,
+                capture_output=not self.config.verbose_tools,
+                timeout=self.config.unidock_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(
+                f"Uni-Dock exceeded its {self.config.unidock_timeout_seconds}-second timeout"
+            ) from error
+        if result.returncode != 0:
+            diagnostic = ""
+            if not self.config.verbose_tools:
+                diagnostic = f": {(result.stderr or result.stdout).strip()[-500:]}"
+            raise RuntimeError(f"Uni-Dock failed with exit code {result.returncode}{diagnostic}")
+
+    @staticmethod
+    def _unidock_poses_to_sdf(template: Mol, input_pdbqt: Path, output_sdf: Path) -> None:
+        if not input_pdbqt.is_file():
+            raise RuntimeError("Uni-Dock did not write poses for this ligand")
+        writer = Chem.SDWriter(str(output_sdf))
+        affinity: float | None = None
+        coordinates: dict[int, tuple[float, float, float]] = {}
+        written = 0
+
+        def write_pose() -> None:
+            nonlocal written
+            if not coordinates:
+                return
+            expected = set(range(template.GetNumAtoms()))
+            observed = {serial - 1 for serial in coordinates}
+            if observed != expected:
+                raise RuntimeError("Uni-Dock pose atom mapping does not match the prepared ligand")
+            pose = Chem.Mol(template)
+            conformer = pose.GetConformer()
+            for serial, position in coordinates.items():
+                conformer.SetAtomPosition(serial - 1, position)
+            if affinity is not None:
+                pose.SetDoubleProp("rigid_vina_affinity", affinity)
+            pose.SetIntProp("rigid_pose_index", written + 1)
+            pose.SetDoubleProp("rigid_conformer_rmsd", conformer_rmsd(template, pose))
+            writer.write(pose)
+            written += 1
+
+        try:
+            for line in input_pdbqt.read_text().splitlines():
+                if line.startswith("MODEL"):
+                    affinity = None
+                    coordinates = {}
+                elif line.startswith("REMARK VINA RESULT:"):
+                    affinity = float(line.split()[3])
+                elif line.startswith(("ATOM  ", "HETATM")):
+                    serial = int(line[6:11])
+                    coordinates[serial] = (
+                        float(line[30:38]),
+                        float(line[38:46]),
+                        float(line[46:54]),
+                    )
+                elif line.startswith("ENDMDL"):
+                    write_pose()
+                    affinity = None
+                    coordinates = {}
+            write_pose()
+        finally:
+            writer.close()
+        if not written:
+            output_sdf.unlink(missing_ok=True)
+            raise RuntimeError("Uni-Dock produced no readable poses for this ligand")
 
     def _run_gnina_minimize(
         self, target: DockingTarget, ligand_sdf: Path, output_sdf: Path
@@ -745,30 +878,6 @@ class BoxDockingPipeline:
                 diagnostic = f": {(result.stderr or result.stdout).strip()[-500:]}"
             raise RuntimeError(f"PoseBusters failed with exit code {result.returncode}{diagnostic}")
 
-    def _annotate_rigid_poses(
-        self, decoded: Mol, rigid_output: Path, annotated_output: Path
-    ) -> None:
-        writer = Chem.SDWriter(str(annotated_output))
-        written = 0
-        try:
-            for pose in _read_mols(rigid_output, quiet=not self.config.verbose_tools):
-                try:
-                    pose.SetDoubleProp("rigid_conformer_rmsd", conformer_rmsd(decoded, pose))
-                except (RuntimeError, ValueError):
-                    pass
-                rigid_affinity = _float_property(
-                    pose.GetPropsAsDict(), "minimizedAffinity", "Affinity"
-                )
-                if rigid_affinity is not None:
-                    pose.SetDoubleProp("rigid_vina_affinity", rigid_affinity)
-                writer.write(pose)
-                written += 1
-        finally:
-            writer.close()
-        if not written:
-            annotated_output.unlink(missing_ok=True)
-            raise RuntimeError("rigid GNINA docking produced no readable poses")
-
     def _refine_rigid_poses(
         self,
         target: DockingTarget,
@@ -779,7 +888,7 @@ class BoxDockingPipeline:
         quiet = not self.config.verbose_tools
         rigid_poses = _read_mols(rigid_output, quiet=quiet)
         if not rigid_poses:
-            raise RuntimeError("rigid GNINA docking produced no readable poses")
+            raise RuntimeError("Uni-Dock produced no readable poses")
 
         raw_refined_output = refined_output.with_name(f"{refined_output.stem}_raw.sdf")
         self._run_gnina_minimize(target, rigid_output, raw_refined_output)
@@ -796,7 +905,10 @@ class BoxDockingPipeline:
                 zip(rigid_poses, refined_poses, strict=True), start=1
             ):
                 rigid_affinity = _float_property(
-                    rigid_pose.GetPropsAsDict(), "minimizedAffinity", "Affinity"
+                    rigid_pose.GetPropsAsDict(),
+                    "rigid_vina_affinity",
+                    "minimizedAffinity",
+                    "Affinity",
                 )
                 if rigid_affinity is not None:
                     refined_pose.SetDoubleProp("rigid_vina_affinity", rigid_affinity)
