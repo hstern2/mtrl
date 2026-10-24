@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -70,8 +71,10 @@ class LillyMedchemFilter:
             rejected = set()
             for path in work.glob(f"{rejected_stem.name}*"):
                 rejected.update(_record_names(path.read_text().splitlines(), known_names))
-            if accepted & rejected or accepted | rejected != known_names:
-                missing = sorted(known_names - accepted - rejected)
+            overlap = accepted & rejected
+            classified = accepted | rejected
+            missing = sorted(known_names - classified)
+            if overlap or not classified:
                 logs = "\n".join(
                     path.read_text(errors="replace") for path in sorted(work.glob("stage*.log"))
                 )
@@ -80,6 +83,13 @@ class LillyMedchemFilter:
                     "Lilly Medchem Rules did not classify every molecule"
                     f" (missing: {', '.join(missing) or 'none'}): "
                     f"{diagnostic or 'no diagnostic output'}"
+                )
+            if missing:
+                warnings.warn(
+                    "Lilly Medchem Rules did not classify "
+                    f"{len(missing)} molecule(s); rejecting them: {', '.join(missing)}",
+                    RuntimeWarning,
+                    stacklevel=2,
                 )
             return [name in accepted for name in names]
 

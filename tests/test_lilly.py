@@ -53,3 +53,16 @@ def test_lilly_filter_detects_silent_internal_pipeline_failure() -> None:
     ):
         with pytest.raises(RuntimeError, match="did not classify every molecule"):
             LillyMedchemFilter().accept_batch([Chem.MolFromSmiles("CCCCCCCC")])
+
+
+def test_lilly_filter_rejects_an_unclassified_molecule() -> None:
+    mols = [Chem.MolFromSmiles("CCO"), Chem.MolFromSmiles("CCCCCCCC")]
+    completed = subprocess.CompletedProcess([], 0, stdout="CCO mtrl_0\n", stderr="")
+    with (
+        patch("mtrl.lilly.shutil.which", return_value="/tools/rules"),
+        patch("mtrl.lilly.subprocess.run", return_value=completed),
+        pytest.warns(RuntimeWarning, match="rejecting them: mtrl_1"),
+    ):
+        accepted = LillyMedchemFilter().accept_batch(mols)
+
+    assert accepted == [True, False]
