@@ -203,7 +203,6 @@ class BoxScoringConfig:
     brenk_filter: bool = False
     pfizer_3_75_filter: bool = False
     max_clogp: float | None = None
-    max_conformers_per_molecule: int | None = None
     protonation_filter: bool = True
     max_protonation_variants: int = 8
     aev_plig_dir: Path | None = None
@@ -225,13 +224,6 @@ class BoxScoringConfig:
         _validate_max_br_sascore(self.max_br_sascore)
         _validate_max_clogp(self.max_clogp)
         _validate_max_protonation_variants(self.max_protonation_variants)
-        conformer_limit = self.max_conformers_per_molecule
-        if conformer_limit is not None and (
-            isinstance(conformer_limit, bool)
-            or not isinstance(conformer_limit, int)
-            or conformer_limit <= 0
-        ):
-            raise ValueError("max_conformers_per_molecule must be a positive integer")
         if not math.isfinite(self.target_failure_score):
             raise ValueError("target_failure_score must be finite")
         if self.accept_targets not in {"any", "all"}:
@@ -290,7 +282,6 @@ class BoxScoringConfig:
             "pfizer_3_75_filter": self.pfizer_3_75_filter,
             "max_br_sascore": self.max_br_sascore,
             "max_clogp": self.max_clogp,
-            "max_conformers_per_molecule": self.max_conformers_per_molecule,
             "protonation_filter": self.protonation_filter,
             "max_protonation_variants": self.max_protonation_variants,
             "lilly_medchem_rules": self.lilly_medchem_rules,

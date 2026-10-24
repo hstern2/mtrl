@@ -103,9 +103,4 @@ class LillyMedchemFilter:
 
 
 def _record_names(lines: list[str], known_names: set[str]) -> set[str]:
-    return {
-        field
-        for line in lines
-        for field in line.split()[1:]
-        if field in known_names
-    }
+    return {field for line in lines for field in line.split()[1:] if field in known_names}

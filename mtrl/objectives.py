@@ -144,21 +144,16 @@ def _evaluate_candidates(
     return scored_indices, conformers, results
 
 
-def _limit_conformers_per_molecule(
+def _group_distinct_conformers_by_molecule(
     token_sequences: list[list[str]],
     candidate_indices: list[int],
     candidates: list[DecodedAMSR],
     items: list[ScoredItem],
-    limit: int | None,
 ) -> tuple[list[int], list[DecodedAMSR]]:
-    """Keep a bounded number of distinct emitted conformers for each molecule."""
-    if limit is None:
-        return candidate_indices, candidates
-
+    """Group molecular identities and discard only identical AMSR emissions."""
     retained_indices = []
     retained_candidates = []
     conformers_seen: dict[str, set[str]] = {}
-    retained_counts: dict[str, int] = {}
     for index, candidate in zip(candidate_indices, candidates, strict=True):
         molecule_key = Chem.MolToSmiles(candidate.mol, isomericSmiles=True)
         items[index].group_key = molecule_key
@@ -166,14 +161,9 @@ def _limit_conformers_per_molecule(
         molecule_conformers = conformers_seen.setdefault(molecule_key, set())
         if conformer_key in molecule_conformers:
             items[index].valid = False
-            items[index].rejection_reason = "duplicate molecular conformer"
+            items[index].rejection_reason = "duplicate AMSR string"
             continue
         molecule_conformers.add(conformer_key)
-        if retained_counts.get(molecule_key, 0) >= limit:
-            items[index].valid = False
-            items[index].rejection_reason = "molecule conformer limit exceeded"
-            continue
-        retained_counts[molecule_key] = retained_counts.get(molecule_key, 0) + 1
         retained_indices.append(index)
         retained_candidates.append(candidate)
     return retained_indices, retained_candidates
@@ -787,12 +777,11 @@ class BoxDockingObjectives(Objectives):
             self.lilly_filter,
             self.protonation_filter,
         )
-        candidate_indices, candidates = _limit_conformers_per_molecule(
+        candidate_indices, candidates = _group_distinct_conformers_by_molecule(
             token_sequences,
             candidate_indices,
             candidates,
             items,
-            self.config.max_conformers_per_molecule,
         )
         diagnostics: list[BoxDockingScore | None] = [None] * len(decoded)
         conformer_indices, _, results = _evaluate_candidates(
@@ -850,14 +839,10 @@ class BoxDockingObjectives(Objectives):
     def get_rewards(self, scored: list[ScoredItem]) -> np.ndarray:
         """Pareto-rank molecules and bound each molecule's total reward.
 
-        Grouping is opt-in through ``max_conformers_per_molecule``. Each
-        objective uses the best score obtained by any retained conformer, while
-        the molecule reward is divided among conformers that supplied at least
-        one of those best scores.
+        Each objective uses the best score obtained by any emitted conformer,
+        while the molecule reward is divided among conformers that supplied at
+        least one of those best scores.
         """
-        if self.config.max_conformers_per_molecule is None:
-            return super().get_rewards(scored)
-
         groups: dict[tuple[str, str | int], list[int]] = {}
         for index, item in enumerate(scored):
             if not item.valid:
@@ -985,16 +970,6 @@ class BoxDockingObjectives(Objectives):
         )
         fronts, _ = nsga2_sort(scores)
         front = [records[index] for index in fronts[0]]
-        if self.config.max_conformers_per_molecule is None:
-            front = list(
-                {
-                    (
-                        record["amsr"],
-                        *(record["scores"][name] for name in objective_names),
-                    ): record
-                    for record in front
-                }.values()
-            )
         return sorted(
             front,
             key=lambda record: (
@@ -1007,9 +982,6 @@ class BoxDockingObjectives(Objectives):
         )
 
     def _aggregate_molecule_records(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if self.config.max_conformers_per_molecule is None:
-            return records
-
         grouped: dict[str, list[dict[str, Any]]] = {}
         for record in records:
             grouped.setdefault(str(record["smiles"]), []).append(record)
@@ -1228,8 +1200,7 @@ class BoxDockingObjectives(Objectives):
             "br_sascore_failed": sum(reason.startswith("BR-SAScore") for reason in reasons),
             "max_clogp_failed": sum(reason.startswith("cLogP filter") for reason in reasons),
             "lilly_failed": sum(reason.startswith("Lilly Medchem Rules") for reason in reasons),
-            "duplicate_conformer": reasons.count("duplicate molecular conformer"),
-            "conformer_limit_exceeded": reasons.count("molecule conformer limit exceeded"),
+            "duplicate_amsr": reasons.count("duplicate AMSR string"),
             "conformer_failed": reasons.count("AMSR conformer construction failed"),
             "all_targets_accepted": sum(
                 record["accepted"]

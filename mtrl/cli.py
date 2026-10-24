@@ -546,15 +546,6 @@ def rl(
         help="Box mode: maximum wall time for each batched AEV-PLIG invocation",
         rich_help_panel="Scoring inputs",
     ),
-    max_conformers_per_molecule: int | None = typer.Option(
-        None,
-        "--max-conformers-per-molecule",
-        help=(
-            "Box RL: dock at most this many distinct generated conformers of each "
-            "canonical molecule per process and balance reward by molecule"
-        ),
-        rich_help_panel="RL training",
-    ),
     evaluation_workers: int = typer.Option(
         _CLI_EVALUATION_WORKERS,
         "--evaluation-workers",
@@ -834,8 +825,6 @@ def rl(
         raise typer.BadParameter("--max-clogp must be finite")
     if not 1 <= max_protonation_variants < 10000:
         raise typer.BadParameter("--max-protonation-variants must be between 1 and 9999")
-    if max_conformers_per_molecule is not None and max_conformers_per_molecule <= 0:
-        raise typer.BadParameter("--max-conformers-per-molecule must be > 0")
     if docking_targets is not None and (receptor_pdb is not None or reference_sdf is not None):
         raise typer.BadParameter(
             "--docking-targets cannot be combined with --receptor-pdb or --reference-sdf"
@@ -843,10 +832,6 @@ def rl(
     if docking_targets is None and (receptor_pdb is None or reference_sdf is None):
         raise typer.BadParameter(
             "provide --docking-targets, or provide both --receptor-pdb and --reference-sdf"
-        )
-    if docking_targets is None and max_conformers_per_molecule is not None:
-        raise typer.BadParameter(
-            "--max-conformers-per-molecule currently requires --docking-targets"
         )
     if docking_targets is None and (aev_plig_dir is not None or aev_plig_python is not None):
         raise typer.BadParameter("AEV-PLIG rescoring requires --docking-targets")
@@ -907,7 +892,6 @@ def rl(
             gnina_timeout_seconds=gnina_timeout_seconds,
             posebusters_config=cast(PoseBustersConfig, posebusters_config),
             posebusters_timeout_seconds=posebusters_timeout_seconds,
-            max_conformers_per_molecule=max_conformers_per_molecule,
             aev_plig_dir=aev_plig_dir.resolve() if aev_plig_dir is not None else None,
             aev_plig_python=(aev_plig_python.resolve() if aev_plig_python is not None else None),
             aev_plig_model=aev_plig_model,
@@ -916,8 +900,6 @@ def rl(
         )
         reward_description = (
             "molecule-balanced global-batch N-dimensional Pareto rank and crowding distance"
-            if max_conformers_per_molecule is not None
-            else "global-batch N-dimensional Pareto rank and crowding distance"
         )
     else:
         assert receptor_pdb is not None and reference_sdf is not None
@@ -1000,9 +982,6 @@ def rl(
                     "max_clogp": max_clogp,
                     "protonation_filter": protonation_filter,
                     "max_protonation_variants": max_protonation_variants,
-                    "max_conformers_per_molecule": (
-                        max_conformers_per_molecule if docking_targets is not None else None
-                    ),
                     "iterations": iterations,
                     "kl_beta": kl_beta,
                     "kl_reference_checkpoint": str(kl_reference_checkpoint.resolve())

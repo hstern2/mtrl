@@ -450,7 +450,6 @@ def test_box_config_round_trips_unidock_settings(tmp_path, monkeypatch) -> None:
         pfizer_3_75_filter=True,
         max_br_sascore=5.0,
         max_clogp=4.0,
-        max_conformers_per_molecule=3,
         posebusters_config="dock-fast",
         posebusters_timeout_seconds=123,
     )
@@ -470,7 +469,6 @@ def test_box_config_round_trips_unidock_settings(tmp_path, monkeypatch) -> None:
     assert restored.pfizer_3_75_filter is True
     assert restored.max_br_sascore == 5.0
     assert restored.max_clogp == 4.0
-    assert restored.max_conformers_per_molecule == 3
     assert restored.posebusters_config == "dock-fast"
     assert restored.posebusters_timeout_seconds == 123
     assert restored.targets == config.targets
@@ -496,18 +494,6 @@ def test_box_config_rejects_nonfinite_clogp_cutoff(tmp_path) -> None:
     )
 
     with pytest.raises(ValueError, match="max_clogp must be finite"):
-        config.validate()
-
-
-@pytest.mark.parametrize("limit", [0, -1, True, 1.5])
-def test_box_config_rejects_invalid_conformer_limit(tmp_path, limit) -> None:
-    config = BoxScoringConfig(
-        targets=(_targets(tmp_path)[0],),
-        output_dir=tmp_path / "out",
-        max_conformers_per_molecule=limit,
-    )
-
-    with pytest.raises(ValueError, match="must be a positive integer"):
         config.validate()
 
 
@@ -744,7 +730,7 @@ def test_aev_plig_adds_one_objective_and_pose_file_per_target(tmp_path) -> None:
     assert output_pose.GetProp("pose_selection_method") == "aev_plig_affinity"
 
 
-def test_box_objectives_limit_distinct_conformers_before_scoring(tmp_path) -> None:
+def test_box_objectives_score_all_distinct_emitted_conformers(tmp_path) -> None:
     targets = _targets(tmp_path)
     pose = _mol3d()
     result = BoxDockingScore(
@@ -762,11 +748,7 @@ def test_box_objectives_limit_distinct_conformers_before_scoring(tmp_path) -> No
     pipeline = FakeBoxPipeline(result)
     decoded = DecodedAMSR(Chem.MolFromSmiles("CCO"), {})
     suite = BoxDockingObjectives(
-        BoxScoringConfig(
-            targets=targets,
-            output_dir=tmp_path / "out",
-            max_conformers_per_molecule=2,
-        ),
+        BoxScoringConfig(targets=targets, output_dir=tmp_path / "out"),
         decode_fn=lambda _: decoded,
         conformer_fn=lambda _: pose,
         pipeline=pipeline,
@@ -774,37 +756,30 @@ def test_box_objectives_limit_distinct_conformers_before_scoring(tmp_path) -> No
 
     scored = suite.evaluate([["a"], ["a"], ["b"], ["c"]])
 
-    assert len(pipeline.seen) == 2
-    assert [item.valid for item in scored] == [True, False, True, False]
-    assert scored[1].rejection_reason == "duplicate molecular conformer"
-    assert scored[3].rejection_reason == "molecule conformer limit exceeded"
+    assert len(pipeline.seen) == 3
+    assert [item.valid for item in scored] == [True, False, True, True]
+    assert scored[1].rejection_reason == "duplicate AMSR string"
     assert {item.group_key for item in scored} == {"CCO"}
 
 
 def test_box_rewards_are_aggregated_and_balanced_by_molecule(tmp_path) -> None:
     targets = _targets(tmp_path)
-    grouped_suite = BoxDockingObjectives(
-        BoxScoringConfig(
-            targets=targets,
-            output_dir=tmp_path / "grouped",
-            max_conformers_per_molecule=3,
-        ),
+    suite = BoxDockingObjectives(
+        BoxScoringConfig(targets=targets, output_dir=tmp_path / "out"),
         pipeline=FakeBoxPipeline(BoxDockingScore()),
     )
-    ordinary_suite = BoxDockingObjectives(
-        BoxScoringConfig(targets=targets, output_dir=tmp_path / "ordinary"),
-        pipeline=FakeBoxPipeline(BoxDockingScore()),
-    )
-    names = [objective.name for objective in grouped_suite.objectives]
+    names = [objective.name for objective in suite.objectives]
     first_scores = dict(zip(names, (8.0, 2.0, 2.0), strict=True))
     second_scores = dict(zip(names, (2.0, 8.0, 2.0), strict=True))
+    dominated_scores = dict(zip(names, (1.0, 1.0, 1.0), strict=True))
     other_scores = dict(zip(names, (2.0, 2.0, 8.0), strict=True))
     scored = [
         ScoredItem(token_ids=[], scores=first_scores, group_key="molecule-a"),
         ScoredItem(token_ids=[], scores=second_scores, group_key="molecule-a"),
+        ScoredItem(token_ids=[], scores=dominated_scores, group_key="molecule-a"),
         ScoredItem(token_ids=[], scores=other_scores, group_key="molecule-b"),
     ]
-    expected = ordinary_suite.get_rewards(
+    expected = super(BoxDockingObjectives, suite).get_rewards(
         [
             ScoredItem(
                 token_ids=[],
@@ -814,21 +789,18 @@ def test_box_rewards_are_aggregated_and_balanced_by_molecule(tmp_path) -> None:
         ]
     )
 
-    rewards = grouped_suite.get_rewards(scored)
+    rewards = suite.get_rewards(scored)
 
     assert rewards[0] == pytest.approx(rewards[1])
     assert rewards[0] + rewards[1] == pytest.approx(expected[0])
-    assert rewards[2] == pytest.approx(expected[1])
+    assert rewards[2] == 0.0
+    assert rewards[3] == pytest.approx(expected[1])
 
 
 def test_molecule_pareto_record_keeps_each_targets_best_conformer(tmp_path) -> None:
     targets = _targets(tmp_path)
     suite = BoxDockingObjectives(
-        BoxScoringConfig(
-            targets=targets,
-            output_dir=tmp_path / "out",
-            max_conformers_per_molecule=2,
-        ),
+        BoxScoringConfig(targets=targets, output_dir=tmp_path / "out"),
         pipeline=FakeBoxPipeline(BoxDockingScore()),
     )
     names = [objective.name for objective in suite.objectives]
@@ -866,7 +838,6 @@ def test_molecule_record_tracks_separate_cnn_and_aev_pose_conformers(tmp_path) -
         BoxScoringConfig(
             targets=(target,),
             output_dir=tmp_path / "out",
-            max_conformers_per_molecule=2,
             aev_plig_dir=tmp_path / "AEV-PLIG",
         ),
         pipeline=FakeBoxPipeline(BoxDockingScore()),
@@ -958,6 +929,7 @@ def test_cumulative_front_respects_minimizing_objectives(tmp_path) -> None:
     records = [
         {
             "amsr": label,
+            "smiles": smiles,
             "scores": {
                 **{
                     objective.name: 5.0
@@ -966,11 +938,17 @@ def test_cumulative_front_respects_minimizing_objectives(tmp_path) -> None:
                 },
                 "cost": cost,
             },
+            "targets": {},
+            "pose_blocks": {},
         }
-        for label, cost in (("lower", 1.0), ("higher", 2.0))
+        for label, smiles, cost in (("lower", "C", 1.0), ("higher", "CC", 2.0))
     ]
 
-    assert suite._pareto_front(records) == [records[0]]
+    front = suite._pareto_front(records)
+
+    assert len(front) == 1
+    assert front[0]["amsr"] == "lower"
+    assert front[0]["scores"]["cost"] == 1.0
 
 
 def test_one_passing_target_keeps_molecule_and_floors_failed_objectives(tmp_path) -> None:

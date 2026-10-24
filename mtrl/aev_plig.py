@@ -72,9 +72,7 @@ class AEVPligScorer:
         data_name = f"mtrl_{os.getpid()}_{uuid.uuid4().hex}"
         graphs = self.directory / "data" / f"{data_name}_graphs.pickle"
         processed = self.directory / "data" / "processed" / f"{data_name}.pt"
-        predictions = (
-            self.directory / "output" / "predictions" / f"{data_name}_predictions.csv"
-        )
+        predictions = self.directory / "output" / "predictions" / f"{data_name}_predictions.csv"
         for parent in (graphs.parent, processed.parent, predictions.parent):
             parent.mkdir(parents=True, exist_ok=True)
 
