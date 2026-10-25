@@ -45,7 +45,8 @@ def validate_targets(
     for target in targets:
         typer.echo(
             f"{target.name}: receptor={target.receptor_pdb} "
-            f"center={target.center} size={target.size} num_modes={target.num_modes}"
+            f"center={target.center} size={target.size} num_modes={target.num_modes} "
+            f"max_pose_centroid_distance={target.max_pose_centroid_distance}"
         )
 
 

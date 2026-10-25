@@ -406,6 +406,7 @@ def test_validate_targets_reports_named_boxes(tmp_path) -> None:
     assert "Valid target manifest: 1 target(s)" in result.stdout
     assert "site_a" in result.stdout
     assert "center=(1.0, 2.0, 3.0)" in result.stdout
+    assert "max_pose_centroid_distance=None" in result.stdout
 
 
 def test_score_command_builds_generic_box_configuration(tmp_path, monkeypatch) -> None:

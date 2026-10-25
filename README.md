@@ -103,14 +103,17 @@ objective. Optional AEV-PLIG rescoring adds a second objective per target:
       "receptor_pdb": "receptors/site_a_open_1.pdb",
       "center": [4.108, 21.909, -18.092],
       "size": [23.8, 23.8, 23.8],
-      "num_modes": 9
+      "num_modes": 9,
+      "max_pose_centroid_distance": 6.0
     }
   ]
 }
 ```
 
-Centers and box sizes are in angstroms. Receptor paths may be absolute or
-relative to the manifest. Run with:
+Centers, box sizes, and `max_pose_centroid_distance` are in angstroms. The
+optional distance rejects a pose when its ligand heavy-atom centroid is too far
+from the box center, after PoseBusters and before objective scoring. Receptor
+paths may be absolute or relative to the manifest. Run with:
 
 ```bash
 uv run mtrl validate-targets targets.json

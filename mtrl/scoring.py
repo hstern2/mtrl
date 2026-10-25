@@ -321,7 +321,7 @@ class StructureScoringPipeline:
 
 @dataclass
 class TargetDockingScore:
-    """Best PoseBusters-passing pose from one receptor/box docking."""
+    """Best pose passing PoseBusters and the optional target-region gate."""
 
     target_name: str
     cnn_affinity: float | None = None
@@ -336,8 +336,10 @@ class TargetDockingScore:
     rigid_conformer_rmsd: float | None = None
     refined_conformer_rmsd: float | None = None
     n_poses: int = 0
+    n_posebusters_passing_poses: int = 0
     n_passing_poses: int = 0
     posebusters_failures: dict[str, int] = field(default_factory=dict)
+    target_region_failures: int = 0
     accepted: bool = False
     rejection_reason: str = ""
     pose: Mol | None = None
@@ -359,8 +361,10 @@ class TargetDockingScore:
             "aev_plig_pose_index": self.aev_plig_pose_index,
             "aev_plig_rejection_reason": self.aev_plig_rejection_reason,
             "n_poses": self.n_poses,
+            "n_posebusters_passing_poses": self.n_posebusters_passing_poses,
             "n_passing_poses": self.n_passing_poses,
             "posebusters_failures": self.posebusters_failures,
+            "target_region_failures": self.target_region_failures,
             "accepted": self.accepted,
             "rejection_reason": self.rejection_reason,
         }
@@ -552,6 +556,7 @@ class BoxDockingPipeline:
                 target.name,
                 refined_sdf,
                 center=target.center,
+                max_centroid_distance=target.max_pose_centroid_distance,
                 quiet=not self.config.verbose_tools,
                 retain_passing_poses=self.config.aev_plig_dir is not None,
             )
@@ -932,13 +937,16 @@ class BoxDockingPipeline:
         output_sdf: Path,
         *,
         center: tuple[float, float, float] | None = None,
+        max_centroid_distance: float | None = None,
         quiet: bool = True,
         retain_passing_poses: bool = False,
     ) -> TargetDockingScore:
         candidates: list[TargetDockingScore] = []
         passing_poses: list[Mol] = []
         n_poses = 0
+        n_posebusters_passing = 0
         n_passing = 0
+        target_region_failures = 0
         failures: Counter[str] = Counter()
         for pose_index, pose in enumerate(_read_mols(output_sdf, quiet=quiet), start=1):
             n_poses += 1
@@ -948,6 +956,25 @@ class BoxDockingPipeline:
             if not passed:
                 failed_checks = str(properties.get("posebusters_failed_checks", "unknown"))
                 failures.update(check for check in failed_checks.split(",") if check)
+                continue
+            n_posebusters_passing += 1
+            centroid_distance = None
+            if center is not None:
+                conformer = pose.GetConformer()
+                heavy_atom_indices = [
+                    atom.GetIdx() for atom in pose.GetAtoms() if atom.GetAtomicNum() > 1
+                ]
+                if heavy_atom_indices:
+                    centroid = tuple(
+                        sum(conformer.GetAtomPosition(index)[axis] for index in heavy_atom_indices)
+                        / len(heavy_atom_indices)
+                        for axis in range(3)
+                    )
+                    centroid_distance = math.dist(centroid, center)
+            if max_centroid_distance is not None and (
+                centroid_distance is None or centroid_distance > max_centroid_distance
+            ):
+                target_region_failures += 1
                 continue
             n_passing += 1
             if retain_passing_poses:
@@ -967,22 +994,26 @@ class BoxDockingPipeline:
                     rigid_conformer_rmsd=_float_property(properties, "rigid_conformer_rmsd"),
                     refined_conformer_rmsd=_float_property(properties, "refined_conformer_rmsd"),
                     pose_index=pose_index,
+                    pose_centroid_distance=centroid_distance,
                     accepted=True,
                     pose=Chem.Mol(pose),
                 )
             )
 
         if not candidates:
-            reason = (
-                "PoseBusters failed for every docking pose"
-                if n_passing == 0
-                else "CNNaffinity is missing from every PoseBusters-passing pose"
-            )
+            if n_posebusters_passing == 0:
+                reason = "PoseBusters failed for every docking pose"
+            elif n_passing == 0:
+                reason = "every PoseBusters-passing pose was outside the target region"
+            else:
+                reason = "CNNaffinity is missing from every passing pose"
             return TargetDockingScore(
                 target_name=target_name,
                 n_poses=n_poses,
+                n_posebusters_passing_poses=n_posebusters_passing,
                 n_passing_poses=n_passing,
                 posebusters_failures=dict(failures),
+                target_region_failures=target_region_failures,
                 rejection_reason=reason,
                 passing_poses=passing_poses,
             )
@@ -994,19 +1025,9 @@ class BoxDockingPipeline:
             ),
         )
         selected.n_poses = n_poses
+        selected.n_posebusters_passing_poses = n_posebusters_passing
         selected.n_passing_poses = n_passing
         selected.posebusters_failures = dict(failures)
+        selected.target_region_failures = target_region_failures
         selected.passing_poses = passing_poses
-        if center is not None and selected.pose is not None:
-            conformer = selected.pose.GetConformer()
-            heavy_atom_indices = [
-                atom.GetIdx() for atom in selected.pose.GetAtoms() if atom.GetAtomicNum() > 1
-            ]
-            if heavy_atom_indices:
-                centroid = tuple(
-                    sum(conformer.GetAtomPosition(index)[axis] for index in heavy_atom_indices)
-                    / len(heavy_atom_indices)
-                    for axis in range(3)
-                )
-                selected.pose_centroid_distance = math.dist(centroid, center)
         return selected

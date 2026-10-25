@@ -25,6 +25,7 @@ class DockingTarget:
     center: tuple[float, float, float]
     size: tuple[float, float, float]
     num_modes: int = 9
+    max_pose_centroid_distance: float | None = None
 
     def validate(self) -> None:
         if not _TARGET_NAME.fullmatch(self.name):
@@ -43,6 +44,11 @@ class DockingTarget:
             )
         if self.num_modes <= 0:
             raise ValueError(f"docking target {self.name!r} num_modes must be > 0")
+        if self.max_pose_centroid_distance is not None and (
+            not math.isfinite(self.max_pose_centroid_distance)
+            or self.max_pose_centroid_distance <= 0
+        ):
+            raise ValueError(f"docking target {self.name!r} max_pose_centroid_distance must be > 0")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,6 +57,7 @@ class DockingTarget:
             "center": list(self.center),
             "size": list(self.size),
             "num_modes": self.num_modes,
+            "max_pose_centroid_distance": self.max_pose_centroid_distance,
         }
 
     @classmethod
@@ -74,12 +81,18 @@ class DockingTarget:
         center = _numeric_triplet(values["center"], target_name=name, field="center")
         size = _numeric_triplet(values["size"], target_name=name, field="size")
         num_modes = _positive_int(values.get("num_modes", 9), target_name=name, field="num_modes")
+        max_pose_centroid_distance = _optional_positive_float(
+            values.get("max_pose_centroid_distance"),
+            target_name=name,
+            field="max_pose_centroid_distance",
+        )
         target = cls(
             name=name,
             receptor_pdb=receptor.resolve(),
             center=center,
             size=size,
             num_modes=num_modes,
+            max_pose_centroid_distance=max_pose_centroid_distance,
         )
         target.validate()
         return target
@@ -101,6 +114,19 @@ def _positive_int(value: object, *, target_name: str, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"docking target {target_name!r} {field} must be a positive integer")
     return value
+
+
+def _optional_positive_float(value: object, *, target_name: str, field: str) -> float | None:
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(f"docking target {target_name!r} {field} must be > 0")
+    return float(value)
 
 
 def _validate_max_br_sascore(value: float | None) -> None:

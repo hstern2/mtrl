@@ -61,6 +61,7 @@ def test_target_manifest_loads_relative_receptors(tmp_path) -> None:
                         "center": [1, 2, 3],
                         "size": [20, 21, 22],
                         "num_modes": 5,
+                        "max_pose_centroid_distance": 6,
                     }
                 ]
             }
@@ -73,6 +74,7 @@ def test_target_manifest_loads_relative_receptors(tmp_path) -> None:
     assert target.center == (1.0, 2.0, 3.0)
     assert target.size == (20.0, 21.0, 22.0)
     assert target.num_modes == 5
+    assert target.max_pose_centroid_distance == 6.0
 
 
 @pytest.mark.parametrize(
@@ -82,6 +84,7 @@ def test_target_manifest_loads_relative_receptors(tmp_path) -> None:
         ({"center": "123"}, "center must be an array of three numbers"),
         ({"size": [20, True, 20]}, "size must be an array of three numbers"),
         ({"num_modes": 0}, "num_modes must be a positive integer"),
+        ({"max_pose_centroid_distance": 0}, "max_pose_centroid_distance must be > 0"),
     ],
 )
 def test_target_manifest_rejects_malformed_fields(tmp_path, target_update, message) -> None:
@@ -141,9 +144,63 @@ def test_best_affinity_is_selected_only_from_posebusters_passing_poses(tmp_path)
     assert result.refined_conformer_rmsd == pytest.approx(0.91)
     assert result.pose_centroid_distance is not None
     assert result.n_poses == 3
+    assert result.n_posebusters_passing_poses == 2
     assert result.n_passing_poses == 2
     assert result.posebusters_failures == {"volume_overlap_with_protein": 1}
+    assert result.target_region_failures == 0
     assert [pose.GetIntProp("_mtrl_pose_index") for pose in result.passing_poses] == [2, 3]
+
+
+def test_pose_centroid_gate_rejects_off_target_pose_before_scoring(tmp_path) -> None:
+    output = tmp_path / "poses.sdf"
+    inside = _mol3d()
+    conformer = inside.GetConformer()
+    heavy_atoms = [atom.GetIdx() for atom in inside.GetAtoms() if atom.GetAtomicNum() > 1]
+    center = tuple(
+        sum(conformer.GetAtomPosition(index)[axis] for index in heavy_atoms) / len(heavy_atoms)
+        for axis in range(3)
+    )
+    outside = Chem.Mol(inside)
+    outside_conformer = outside.GetConformer()
+    for index in range(outside.GetNumAtoms()):
+        position = outside_conformer.GetAtomPosition(index)
+        outside_conformer.SetAtomPosition(index, (position.x + 10.0, position.y, position.z))
+    for pose, affinity in ((outside, 9.0), (inside, 7.0)):
+        pose.SetProp("CNNaffinity", str(affinity))
+        pose.SetProp("posebusters_passed", "True")
+    _write_many(output, [outside, inside])
+
+    result = BoxDockingPipeline._select_passing_pose(
+        "q_open",
+        output,
+        center=center,
+        max_centroid_distance=2.0,
+        retain_passing_poses=True,
+    )
+
+    assert result.accepted
+    assert result.cnn_affinity == pytest.approx(7.0)
+    assert result.pose_index == 2
+    assert result.pose_centroid_distance < 1e-3
+    assert result.n_posebusters_passing_poses == 2
+    assert result.n_passing_poses == 1
+    assert result.target_region_failures == 1
+    assert [pose.GetIntProp("_mtrl_pose_index") for pose in result.passing_poses] == [2]
+
+    rejected = BoxDockingPipeline._select_passing_pose(
+        "q_open",
+        output,
+        center=(center[0] - 20.0, center[1], center[2]),
+        max_centroid_distance=2.0,
+    )
+
+    assert not rejected.accepted
+    assert rejected.n_posebusters_passing_poses == 2
+    assert rejected.n_passing_poses == 0
+    assert rejected.target_region_failures == 2
+    assert rejected.rejection_reason == (
+        "every PoseBusters-passing pose was outside the target region"
+    )
 
 
 def test_aev_plig_rescores_all_passing_poses_and_selects_its_own_best(tmp_path) -> None:
