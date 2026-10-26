@@ -13,7 +13,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "torch>=2.4,<3",
-    "trl @ git+https://github.com/hstern2/trl.git@5e8b1278a9e513db56fa4f34fa22b79d3f9963da",
+    "trl @ git+https://github.com/hstern2/trl.git@d18b791df5824db2bbcb9ab1e044c6eba2179b53",
     "amsr @ git+https://github.com/hstern2/amsr.git@86fd7004947946012efd907496038327477c8ce6",
     "lad @ git+https://github.com/OrogenTX/lad.git@e15343efcdddf9a9b7fb3e025cf30ea3df1a7a23 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "rdkit",
