@@ -104,16 +104,22 @@ objective. Optional AEV-PLIG rescoring adds a second objective per target:
       "center": [4.108, 21.909, -18.092],
       "size": [23.8, 23.8, 23.8],
       "num_modes": 9,
-      "max_pose_centroid_distance": 6.0
+      "region_points_pdb": "regions/site_a_open_1.pdb",
+      "region_model": 1,
+      "region_radius": 1.7,
+      "min_region_heavy_atom_fraction": 0.9,
+      "max_region_outside_distance": 1.5
     }
   ]
 }
 ```
 
-Centers, box sizes, and `max_pose_centroid_distance` are in angstroms. The
-optional distance rejects a pose when its ligand heavy-atom centroid is too far
-from the box center, after PoseBusters and before objective scoring. Receptor
-paths may be absolute or relative to the manifest. Run with:
+Centers, box sizes, radii, and distances are in angstroms. A region-points PDB
+defines an optional irregular target region as the union of spheres with
+`region_radius`. The fraction and maximum-outside-distance gates reject poses
+that do not occupy that region after PoseBusters and before objective scoring.
+`max_pose_centroid_distance` remains available for spherical regions. Receptor
+and region paths may be absolute or relative to the manifest. Run with:
 
 ```bash
 uv run mtrl validate-targets targets.json

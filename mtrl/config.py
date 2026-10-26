@@ -26,6 +26,11 @@ class DockingTarget:
     size: tuple[float, float, float]
     num_modes: int = 9
     max_pose_centroid_distance: float | None = None
+    region_points_pdb: Path | None = None
+    region_model: int = 1
+    region_radius: float = 1.7
+    min_region_heavy_atom_fraction: float | None = None
+    max_region_outside_distance: float | None = None
 
     def validate(self) -> None:
         if not _TARGET_NAME.fullmatch(self.name):
@@ -49,6 +54,36 @@ class DockingTarget:
             or self.max_pose_centroid_distance <= 0
         ):
             raise ValueError(f"docking target {self.name!r} max_pose_centroid_distance must be > 0")
+        if self.region_points_pdb is not None and not self.region_points_pdb.is_file():
+            raise ValueError(
+                f"docking target region-points PDB does not exist: {self.region_points_pdb}"
+            )
+        if self.region_model <= 0:
+            raise ValueError(f"docking target {self.name!r} region_model must be > 0")
+        if not math.isfinite(self.region_radius) or self.region_radius <= 0:
+            raise ValueError(f"docking target {self.name!r} region_radius must be > 0")
+        if self.min_region_heavy_atom_fraction is not None and not (
+            math.isfinite(self.min_region_heavy_atom_fraction)
+            and 0 < self.min_region_heavy_atom_fraction <= 1
+        ):
+            raise ValueError(
+                f"docking target {self.name!r} min_region_heavy_atom_fraction "
+                "must be in (0, 1]"
+            )
+        if self.max_region_outside_distance is not None and (
+            not math.isfinite(self.max_region_outside_distance)
+            or self.max_region_outside_distance < 0
+        ):
+            raise ValueError(
+                f"docking target {self.name!r} max_region_outside_distance must be >= 0"
+            )
+        if self.region_points_pdb is None and (
+            self.min_region_heavy_atom_fraction is not None
+            or self.max_region_outside_distance is not None
+        ):
+            raise ValueError(
+                f"docking target {self.name!r} region thresholds require region_points_pdb"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +93,13 @@ class DockingTarget:
             "size": list(self.size),
             "num_modes": self.num_modes,
             "max_pose_centroid_distance": self.max_pose_centroid_distance,
+            "region_points_pdb": (
+                str(self.region_points_pdb) if self.region_points_pdb is not None else None
+            ),
+            "region_model": self.region_model,
+            "region_radius": self.region_radius,
+            "min_region_heavy_atom_fraction": self.min_region_heavy_atom_fraction,
+            "max_region_outside_distance": self.max_region_outside_distance,
         }
 
     @classmethod
@@ -86,6 +128,34 @@ class DockingTarget:
             target_name=name,
             field="max_pose_centroid_distance",
         )
+        region_value = values.get("region_points_pdb")
+        if region_value is not None and (
+            not isinstance(region_value, str) or not region_value
+        ):
+            raise ValueError(f"docking target {name!r} region_points_pdb must be a path string")
+        region_points_pdb = Path(region_value) if region_value is not None else None
+        if (
+            region_points_pdb is not None
+            and base_dir is not None
+            and not region_points_pdb.is_absolute()
+        ):
+            region_points_pdb = base_dir / region_points_pdb
+        region_model = _positive_int(
+            values.get("region_model", 1), target_name=name, field="region_model"
+        )
+        region_radius = _positive_float(
+            values.get("region_radius", 1.7), target_name=name, field="region_radius"
+        )
+        min_region_heavy_atom_fraction = _optional_fraction(
+            values.get("min_region_heavy_atom_fraction"),
+            target_name=name,
+            field="min_region_heavy_atom_fraction",
+        )
+        max_region_outside_distance = _optional_nonnegative_float(
+            values.get("max_region_outside_distance"),
+            target_name=name,
+            field="max_region_outside_distance",
+        )
         target = cls(
             name=name,
             receptor_pdb=receptor.resolve(),
@@ -93,6 +163,13 @@ class DockingTarget:
             size=size,
             num_modes=num_modes,
             max_pose_centroid_distance=max_pose_centroid_distance,
+            region_points_pdb=(
+                region_points_pdb.resolve() if region_points_pdb is not None else None
+            ),
+            region_model=region_model,
+            region_radius=region_radius,
+            min_region_heavy_atom_fraction=min_region_heavy_atom_fraction,
+            max_region_outside_distance=max_region_outside_distance,
         )
         target.validate()
         return target
@@ -114,6 +191,41 @@ def _positive_int(value: object, *, target_name: str, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"docking target {target_name!r} {field} must be a positive integer")
     return value
+
+
+def _positive_float(value: object, *, target_name: str, field: str) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(f"docking target {target_name!r} {field} must be > 0")
+    return float(value)
+
+
+def _optional_fraction(value: object, *, target_name: str, field: str) -> float | None:
+    if value is None:
+        return None
+    result = _positive_float(value, target_name=target_name, field=field)
+    if result > 1:
+        raise ValueError(f"docking target {target_name!r} {field} must be in (0, 1]")
+    return result
+
+
+def _optional_nonnegative_float(
+    value: object, *, target_name: str, field: str
+) -> float | None:
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise ValueError(f"docking target {target_name!r} {field} must be >= 0")
+    return float(value)
 
 
 def _optional_positive_float(value: object, *, target_name: str, field: str) -> float | None:

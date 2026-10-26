@@ -46,7 +46,10 @@ def validate_targets(
         typer.echo(
             f"{target.name}: receptor={target.receptor_pdb} "
             f"center={target.center} size={target.size} num_modes={target.num_modes} "
-            f"max_pose_centroid_distance={target.max_pose_centroid_distance}"
+            f"max_pose_centroid_distance={target.max_pose_centroid_distance} "
+            f"region_points_pdb={target.region_points_pdb} "
+            f"min_region_heavy_atom_fraction={target.min_region_heavy_atom_fraction} "
+            f"max_region_outside_distance={target.max_region_outside_distance}"
         )
 
 

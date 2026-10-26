@@ -329,6 +329,8 @@ class TargetDockingScore:
     vina_affinity: float | None = None
     pose_index: int | None = None
     pose_centroid_distance: float | None = None
+    pose_region_heavy_atom_fraction: float | None = None
+    pose_region_max_outside_distance: float | None = None
     aev_plig_affinity: float | None = None
     aev_plig_pose_index: int | None = None
     aev_plig_rejection_reason: str = ""
@@ -357,6 +359,8 @@ class TargetDockingScore:
             "refined_conformer_rmsd": self.refined_conformer_rmsd,
             "pose_index": self.pose_index,
             "pose_centroid_distance": self.pose_centroid_distance,
+            "pose_region_heavy_atom_fraction": self.pose_region_heavy_atom_fraction,
+            "pose_region_max_outside_distance": self.pose_region_max_outside_distance,
             "aev_plig_affinity": self.aev_plig_affinity,
             "aev_plig_pose_index": self.aev_plig_pose_index,
             "aev_plig_rejection_reason": self.aev_plig_rejection_reason,
@@ -390,6 +394,52 @@ def _float_property(properties: dict, *names: str) -> float | None:
     return None
 
 
+def _read_region_points(
+    path: Path, model: int
+) -> tuple[tuple[float, float, float], ...]:
+    """Read one MODEL of ATOM/HETATM coordinates from a PDB region mask."""
+    points: list[tuple[float, float, float]] = []
+    current_model = 1
+    for line in path.read_text().splitlines():
+        if line.startswith("MODEL"):
+            fields = line.split()
+            if len(fields) < 2:
+                raise ValueError(f"invalid MODEL record in region-points PDB: {path}")
+            current_model = int(fields[1])
+        elif line.startswith(("ATOM  ", "HETATM")) and current_model == model:
+            try:
+                points.append(
+                    (float(line[30:38]), float(line[38:46]), float(line[46:54]))
+                )
+            except ValueError as error:
+                raise ValueError(f"invalid coordinates in region-points PDB: {path}") from error
+    if not points:
+        raise ValueError(f"region-points PDB {path} has no atoms in model {model}")
+    return tuple(points)
+
+
+def _pose_region_metrics(
+    pose: Mol,
+    points: tuple[tuple[float, float, float], ...],
+    radius: float,
+) -> tuple[float | None, float | None]:
+    """Return heavy-atom occupancy and the largest excursion beyond a region mask."""
+    conformer = pose.GetConformer()
+    distances = []
+    for atom in pose.GetAtoms():
+        if atom.GetAtomicNum() <= 1:
+            continue
+        position = conformer.GetAtomPosition(atom.GetIdx())
+        distances.append(
+            min(math.dist((position.x, position.y, position.z), point) for point in points)
+        )
+    if not distances:
+        return None, None
+    fraction = sum(distance <= radius for distance in distances) / len(distances)
+    max_outside = max(0.0, max(distances) - radius)
+    return fraction, max_outside
+
+
 @dataclass(frozen=True)
 class _PreparedLigand:
     name: str
@@ -410,6 +460,11 @@ class BoxDockingPipeline:
         self._conformer_pool: ProcessPoolExecutor | None = None
         self._receptor_directory = TemporaryDirectory(prefix=f"mtrl_receptors_r{self.rank}_")
         self._prepared_receptors: dict[str, Path] = {}
+        self._region_points = {
+            target.name: _read_region_points(target.region_points_pdb, target.region_model)
+            for target in config.targets
+            if target.region_points_pdb is not None
+        }
         gnina.require()
         busters.require()
 
@@ -557,6 +612,10 @@ class BoxDockingPipeline:
                 refined_sdf,
                 center=target.center,
                 max_centroid_distance=target.max_pose_centroid_distance,
+                region_points=self._region_points.get(target.name),
+                region_radius=target.region_radius,
+                min_region_heavy_atom_fraction=target.min_region_heavy_atom_fraction,
+                max_region_outside_distance=target.max_region_outside_distance,
                 quiet=not self.config.verbose_tools,
                 retain_passing_poses=self.config.aev_plig_dir is not None,
             )
@@ -938,6 +997,10 @@ class BoxDockingPipeline:
         *,
         center: tuple[float, float, float] | None = None,
         max_centroid_distance: float | None = None,
+        region_points: tuple[tuple[float, float, float], ...] | None = None,
+        region_radius: float = 1.7,
+        min_region_heavy_atom_fraction: float | None = None,
+        max_region_outside_distance: float | None = None,
         quiet: bool = True,
         retain_passing_poses: bool = False,
     ) -> TargetDockingScore:
@@ -971,8 +1034,26 @@ class BoxDockingPipeline:
                         for axis in range(3)
                     )
                     centroid_distance = math.dist(centroid, center)
+            region_fraction = None
+            region_max_outside = None
+            if region_points is not None:
+                region_fraction, region_max_outside = _pose_region_metrics(
+                    pose, region_points, region_radius
+                )
             if max_centroid_distance is not None and (
                 centroid_distance is None or centroid_distance > max_centroid_distance
+            ):
+                target_region_failures += 1
+                continue
+            if min_region_heavy_atom_fraction is not None and (
+                region_fraction is None
+                or region_fraction < min_region_heavy_atom_fraction
+            ):
+                target_region_failures += 1
+                continue
+            if max_region_outside_distance is not None and (
+                region_max_outside is None
+                or region_max_outside > max_region_outside_distance
             ):
                 target_region_failures += 1
                 continue
@@ -995,6 +1076,8 @@ class BoxDockingPipeline:
                     refined_conformer_rmsd=_float_property(properties, "refined_conformer_rmsd"),
                     pose_index=pose_index,
                     pose_centroid_distance=centroid_distance,
+                    pose_region_heavy_atom_fraction=region_fraction,
+                    pose_region_max_outside_distance=region_max_outside,
                     accepted=True,
                     pose=Chem.Mol(pose),
                 )

@@ -50,6 +50,8 @@ def _targets(tmp_path: Path) -> tuple[DockingTarget, ...]:
 def test_target_manifest_loads_relative_receptors(tmp_path) -> None:
     receptor = tmp_path / "receptor.pdb"
     receptor.write_text("END\n")
+    region = tmp_path / "region.pdb"
+    region.write_text("HETATM    1  C   CAV A   1       1.000   2.000   3.000\nEND\n")
     manifest = tmp_path / "targets.json"
     manifest.write_text(
         json.dumps(
@@ -62,6 +64,11 @@ def test_target_manifest_loads_relative_receptors(tmp_path) -> None:
                         "size": [20, 21, 22],
                         "num_modes": 5,
                         "max_pose_centroid_distance": 6,
+                        "region_points_pdb": "region.pdb",
+                        "region_model": 1,
+                        "region_radius": 1.8,
+                        "min_region_heavy_atom_fraction": 0.9,
+                        "max_region_outside_distance": 1.5,
                     }
                 ]
             }
@@ -75,6 +82,11 @@ def test_target_manifest_loads_relative_receptors(tmp_path) -> None:
     assert target.size == (20.0, 21.0, 22.0)
     assert target.num_modes == 5
     assert target.max_pose_centroid_distance == 6.0
+    assert target.region_points_pdb == region.resolve()
+    assert target.region_model == 1
+    assert target.region_radius == pytest.approx(1.8)
+    assert target.min_region_heavy_atom_fraction == pytest.approx(0.9)
+    assert target.max_region_outside_distance == pytest.approx(1.5)
 
 
 @pytest.mark.parametrize(
@@ -85,6 +97,13 @@ def test_target_manifest_loads_relative_receptors(tmp_path) -> None:
         ({"size": [20, True, 20]}, "size must be an array of three numbers"),
         ({"num_modes": 0}, "num_modes must be a positive integer"),
         ({"max_pose_centroid_distance": 0}, "max_pose_centroid_distance must be > 0"),
+        ({"region_model": 0}, "region_model must be a positive integer"),
+        ({"region_radius": 0}, "region_radius must be > 0"),
+        (
+            {"min_region_heavy_atom_fraction": 1.1},
+            "min_region_heavy_atom_fraction must be in",
+        ),
+        ({"max_region_outside_distance": -1}, "max_region_outside_distance must be >= 0"),
     ],
 )
 def test_target_manifest_rejects_malformed_fields(tmp_path, target_update, message) -> None:
@@ -201,6 +220,52 @@ def test_pose_centroid_gate_rejects_off_target_pose_before_scoring(tmp_path) -> 
     assert rejected.rejection_reason == (
         "every PoseBusters-passing pose was outside the target region"
     )
+
+
+def test_cavity_region_gate_rejects_exterior_pose_before_scoring(tmp_path) -> None:
+    output = tmp_path / "poses.sdf"
+    inside = _mol3d()
+    inside_conformer = inside.GetConformer()
+    region_points = tuple(
+        (
+            inside_conformer.GetAtomPosition(atom.GetIdx()).x,
+            inside_conformer.GetAtomPosition(atom.GetIdx()).y,
+            inside_conformer.GetAtomPosition(atom.GetIdx()).z,
+        )
+        for atom in inside.GetAtoms()
+        if atom.GetAtomicNum() > 1
+    )
+    outside = Chem.Mol(inside)
+    outside_conformer = outside.GetConformer()
+    outside_atom = next(atom for atom in outside.GetAtoms() if atom.GetAtomicNum() > 1)
+    position = outside_conformer.GetAtomPosition(outside_atom.GetIdx())
+    outside_conformer.SetAtomPosition(
+        outside_atom.GetIdx(), (position.x + 8, position.y, position.z)
+    )
+    for pose, affinity in ((outside, 9.0), (inside, 7.0)):
+        pose.SetProp("CNNaffinity", str(affinity))
+        pose.SetProp("posebusters_passed", "True")
+    _write_many(output, [outside, inside])
+
+    result = BoxDockingPipeline._select_passing_pose(
+        "site_a",
+        output,
+        region_points=region_points,
+        region_radius=1.0,
+        min_region_heavy_atom_fraction=0.9,
+        max_region_outside_distance=1.0,
+        retain_passing_poses=True,
+    )
+
+    assert result.accepted
+    assert result.cnn_affinity == pytest.approx(7.0)
+    assert result.pose_index == 2
+    assert result.pose_region_heavy_atom_fraction == pytest.approx(1.0)
+    assert result.pose_region_max_outside_distance == pytest.approx(0.0)
+    assert result.n_posebusters_passing_poses == 2
+    assert result.n_passing_poses == 1
+    assert result.target_region_failures == 1
+    assert len(result.passing_poses) == 1
 
 
 def test_aev_plig_rescores_all_passing_poses_and_selects_its_own_best(tmp_path) -> None:
