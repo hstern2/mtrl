@@ -1,4 +1,6 @@
 import json
+import sys
+from pathlib import Path
 
 from rdkit import Chem
 from rdkit.Chem import AllChem
@@ -330,3 +332,54 @@ def test_score_sdf_applies_muegge_and_brenk_before_docking(tmp_path) -> None:
     assert records[0]["rejection_reason"].startswith("Muegge filter failed:")
     assert records[1]["rejection_reason"] == "Brenk filter failed: Aliphatic_long_chain"
     assert records[2]["accepted"]
+
+
+def test_score_sdf_rejects_unprecedented_rings_before_docking(tmp_path, monkeypatch) -> None:
+    input_sdf = tmp_path / "input.sdf"
+    writer = Chem.SDWriter(str(input_sdf))
+    writer.write(_mol3d_from_smiles("c1ccccc1", "known_ring"))
+    writer.write(_mol3d_from_smiles("C1C[SiH2]1", "unprecedented_ring"))
+    writer.close()
+
+    receptor = tmp_path / "receptor.pdb"
+    receptor.write_text("END\n")
+    target = DockingTarget(
+        name="site_a",
+        receptor_pdb=receptor,
+        center=(0.0, 0.0, 0.0),
+        size=(20.0, 20.0, 20.0),
+    )
+    database = tmp_path / "rings.bdb"
+    database.touch()
+
+    class FakeRingFilter:
+        def __init__(self, database_path, python_path):
+            assert database_path == database
+            assert python_path == Path(sys.executable)
+
+        def accept_batch(self, mols):
+            assert [mol.GetProp("_Name") for mol in mols] == ["known_ring", "unprecedented_ring"]
+            return [True, False]
+
+    monkeypatch.setattr("mtrl.box_score.RingPrecedentFilter", FakeRingFilter)
+    result = BoxDockingScore(
+        targets={"site_a": TargetDockingScore(target_name="site_a", accepted=True)},
+        accepted=True,
+    )
+    pipeline = FakePipeline(result)
+    config = BoxScoringConfig(
+        targets=(target,),
+        output_dir=tmp_path / "scored",
+        protonation_filter=False,
+        ring_database=database,
+        ring_python=Path(sys.executable),
+    )
+
+    score_sdf(input_sdf, config, pipeline=pipeline)
+
+    assert [mol.GetProp("_Name") for mol in pipeline.seen] == ["known_ring"]
+    records = [
+        json.loads(line) for line in (config.output_dir / "scores.jsonl").read_text().splitlines()
+    ]
+    assert records[0]["accepted"]
+    assert records[1]["rejection_reason"] == "Ring precedent filter: unprecedented ring system"

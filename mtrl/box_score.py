@@ -11,6 +11,7 @@ from mtrl.config import BoxScoringConfig
 from mtrl.lilly import LillyMedchemFilter
 from mtrl.molecule_filters import molecule_filter_rejection_reason
 from mtrl.protonation import ProtonationFilter
+from mtrl.ring_precedent import RingPrecedentFilter
 from mtrl.scoring import BoxDockingPipeline, BoxDockingScore
 
 
@@ -127,6 +128,21 @@ def score_sdf(
             candidate_indices.append(index)
             candidates.append(mol)
         records.append(record)
+
+    if config.ring_database is not None and config.ring_python is not None and candidates:
+        ring_filter = RingPrecedentFilter(config.ring_database, config.ring_python)
+        passed = ring_filter.accept_batch(candidates)
+        retained_indices = []
+        retained_candidates = []
+        for record_index, mol, accepted in zip(candidate_indices, candidates, passed, strict=True):
+            if accepted:
+                retained_indices.append(record_index)
+                retained_candidates.append(mol)
+            else:
+                records[record_index]["rejection_reason"] = (
+                    "Ring precedent filter: unprecedented ring system"
+                )
+        candidate_indices, candidates = retained_indices, retained_candidates
 
     if config.lilly_medchem_rules and lilly_filter is None:
         lilly_filter = LillyMedchemFilter(config.lilly_rules_executable)

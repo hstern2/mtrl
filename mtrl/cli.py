@@ -207,6 +207,16 @@ def score(
         "--lilly-rules-executable",
         help="Command name or path for Lilly_Medchem_Rules.rb",
     ),
+    ring_database: Path | None = typer.Option(
+        None,
+        "--ring-database",
+        help="Enable the LillyMol unprecedented-rings filter with this ring database",
+    ),
+    ring_python: Path | None = typer.Option(
+        None,
+        "--ring-python",
+        help="Python interpreter with LillyMol installed; required with --ring-database",
+    ),
     verbose_tools: bool = typer.Option(
         False,
         help="Show GNINA and PoseBusters output",
@@ -269,6 +279,8 @@ def score(
             max_protonation_variants=max_protonation_variants,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
+            ring_database=ring_database.resolve() if ring_database is not None else None,
+            ring_python=ring_python.resolve() if ring_python is not None else None,
             verbose_tools=verbose_tools,
             evaluation_workers=evaluation_workers,
             target_failure_score=target_failure_score,
@@ -631,6 +643,18 @@ def rl(
         ),
         rich_help_panel="Molecule gates",
     ),
+    ring_database: Path | None = typer.Option(
+        None,
+        "--ring-database",
+        help="Enable the LillyMol unprecedented-rings filter with this ring database",
+        rich_help_panel="Molecule gates",
+    ),
+    ring_python: Path | None = typer.Option(
+        None,
+        "--ring-python",
+        help="Python interpreter with LillyMol installed; required with --ring-database",
+        rich_help_panel="Molecule gates",
+    ),
     iterations: int = typer.Option(
         1000,
         help=(
@@ -884,6 +908,8 @@ def rl(
             max_protonation_variants=max_protonation_variants,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
+            ring_database=ring_database.resolve() if ring_database is not None else None,
+            ring_python=ring_python.resolve() if ring_python is not None else None,
             verbose_tools=verbose_tools,
             evaluation_workers=evaluation_workers,
             target_failure_score=target_failure_score,
@@ -921,6 +947,8 @@ def rl(
             max_protonation_variants=max_protonation_variants,
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
+            ring_database=ring_database.resolve() if ring_database is not None else None,
+            ring_python=ring_python.resolve() if ring_python is not None else None,
             verbose_tools=verbose_tools,
             evaluation_workers=evaluation_workers,
         )

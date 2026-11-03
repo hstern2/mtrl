@@ -161,6 +161,23 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
 ```
 
 All enabled molecule filters run before conformer construction and docking.
+The ring precedent filter is off by default. To reject ring systems absent from a
+LillyMol ring database, add these options to `mtrl score` or either `mtrl rl`
+mode:
+
+```bash
+--ring-database /path/to/chembl_37.rings.bdb \
+--ring-python ~/venvs/lillymol/bin/python
+```
+
+The database should be built with LillyMol's `Makefile.collection` ring settings
+(including `UST:ACHRY` atom typing, a maximum ring size of 8, and at most 10
+rings per system). The filter queries LillyMol in the separate Python environment
+named by `--ring-python`; `mtrl` does not need LillyMol installed in its own
+environment. Molecules with no eligible ring system, including acyclic molecules,
+pass the filter. A lookup error stops scoring rather than silently accepting a
+molecule. Without these options, this filter does not require LillyMol.
+
 The protonation filter is enabled by default; use `--no-protonation-filter` to
 disable it. It checks whether the emitted protonation state is among
 Dimorphite-DL predictions for pH 7.0–7.8. It rejects a molecule if the state is

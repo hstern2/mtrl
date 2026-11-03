@@ -256,6 +256,17 @@ def _validate_max_protonation_variants(value: int) -> None:
         raise ValueError("max_protonation_variants must be between 1 and 9999")
 
 
+def _validate_ring_precedent(database: Path | None, python: Path | None) -> None:
+    if database is None:
+        if python is not None:
+            raise ValueError("ring_python requires ring_database")
+        return
+    if not database.is_file():
+        raise ValueError(f"ring database does not exist: {database}")
+    if python is None or not python.is_file() or not os.access(python, os.X_OK):
+        raise ValueError("ring_python must name an executable LillyMol Python interpreter")
+
+
 @dataclass(frozen=True)
 class ScoringConfig:
     receptor_pdb: Path
@@ -273,6 +284,8 @@ class ScoringConfig:
     max_clogp: float | None = None
     protonation_filter: bool = True
     max_protonation_variants: int = 8
+    ring_database: Path | None = None
+    ring_python: Path | None = None
 
     def validate(self) -> None:
         if not self.receptor_pdb.is_file():
@@ -284,11 +297,15 @@ class ScoringConfig:
         _validate_max_br_sascore(self.max_br_sascore)
         _validate_max_clogp(self.max_clogp)
         _validate_max_protonation_variants(self.max_protonation_variants)
+        _validate_ring_precedent(self.ring_database, self.ring_python)
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         for key in ("receptor_pdb", "reference_sdf", "output_dir"):
             result[key] = str(result[key])
+        for key in ("ring_database", "ring_python"):
+            if result[key] is not None:
+                result[key] = str(result[key])
         result["mode"] = "reference_minimize"
         return result
 
@@ -310,6 +327,9 @@ class ScoringConfig:
             raise RuntimeError(f"expected reference-minimize scoring configuration, found {mode!r}")
         for key in ("receptor_pdb", "reference_sdf", "output_dir"):
             values[key] = Path(values[key])
+        for key in ("ring_database", "ring_python"):
+            if values.get(key) is not None:
+                values[key] = Path(values[key])
         config = cls(**values)
         config.validate()
         return config
@@ -343,6 +363,8 @@ class BoxScoringConfig:
     max_clogp: float | None = None
     protonation_filter: bool = True
     max_protonation_variants: int = 8
+    ring_database: Path | None = None
+    ring_python: Path | None = None
     aev_plig_dir: Path | None = None
     aev_plig_python: Path | None = None
     aev_plig_model: str = "model_GATv2Net_ligsim90_fep_benchmark"
@@ -362,6 +384,7 @@ class BoxScoringConfig:
         _validate_max_br_sascore(self.max_br_sascore)
         _validate_max_clogp(self.max_clogp)
         _validate_max_protonation_variants(self.max_protonation_variants)
+        _validate_ring_precedent(self.ring_database, self.ring_python)
         if not math.isfinite(self.target_failure_score):
             raise ValueError("target_failure_score must be finite")
         if self.accept_targets not in {"any", "all"}:
@@ -424,6 +447,8 @@ class BoxScoringConfig:
             "max_protonation_variants": self.max_protonation_variants,
             "lilly_medchem_rules": self.lilly_medchem_rules,
             "lilly_rules_executable": self.lilly_rules_executable,
+            "ring_database": str(self.ring_database) if self.ring_database is not None else None,
+            "ring_python": str(self.ring_python) if self.ring_python is not None else None,
             "verbose_tools": self.verbose_tools,
             "evaluation_workers": self.evaluation_workers,
             "target_failure_score": self.target_failure_score,
@@ -461,7 +486,7 @@ class BoxScoringConfig:
         if mode != "box_docking":
             raise RuntimeError(f"expected box-docking scoring configuration, found {mode!r}")
         values["output_dir"] = Path(values["output_dir"])
-        for key in ("aev_plig_dir", "aev_plig_python"):
+        for key in ("aev_plig_dir", "aev_plig_python", "ring_database", "ring_python"):
             if values.get(key) is not None:
                 values[key] = Path(values[key])
         values["targets"] = tuple(DockingTarget.from_dict(target) for target in values["targets"])

@@ -23,6 +23,7 @@ from mtrl.config import BoxScoringConfig, ScoringConfig, scoring_mode_from_env
 from mtrl.lilly import LillyMedchemFilter
 from mtrl.molecule_filters import molecule_filter_rejection_reason
 from mtrl.protonation import ProtonationFilter
+from mtrl.ring_precedent import RingPrecedentFilter
 from mtrl.scoring import (
     BoxDockingPipeline,
     BoxDockingScore,
@@ -57,6 +58,7 @@ def _screen_candidates(
     max_br_sascore: float | None,
     max_clogp: float | None,
     lilly_filter: LillyMedchemFilter | None,
+    ring_filter: RingPrecedentFilter | None,
     protonation_filter: ProtonationFilter | None,
 ) -> tuple[list[DecodedAMSR | None], list[ScoredItem], list[int], list[DecodedAMSR]]:
     """Decode candidates and apply inexpensive molecule-level gates."""
@@ -86,6 +88,19 @@ def _screen_candidates(
         else:
             candidate_indices.append(index)
             candidates.append(candidate)
+
+    if ring_filter is not None and candidates:
+        retained_indices = []
+        retained_candidates = []
+        passed = ring_filter.accept_batch([candidate.mol for candidate in candidates])
+        for index, candidate, accepted in zip(candidate_indices, candidates, passed, strict=True):
+            if accepted:
+                retained_indices.append(index)
+                retained_candidates.append(candidate)
+            else:
+                items[index].valid = False
+                items[index].rejection_reason = "Ring precedent filter: unprecedented ring system"
+        candidate_indices, candidates = retained_indices, retained_candidates
 
     if lilly_filter is None or not candidates:
         return decoded, items, candidate_indices, candidates
@@ -290,6 +305,11 @@ class DockingObjectives(Objectives):
         self.lilly_filter = lilly_filter
         if config.lilly_medchem_rules and self.lilly_filter is None:
             self.lilly_filter = LillyMedchemFilter(config.lilly_rules_executable)
+        self.ring_filter = (
+            RingPrecedentFilter(config.ring_database, config.ring_python)
+            if config.ring_database is not None and config.ring_python is not None
+            else None
+        )
         self.protonation_filter = (
             ProtonationFilter(config.max_protonation_variants)
             if config.protonation_filter
@@ -307,6 +327,7 @@ class DockingObjectives(Objectives):
             self.config.max_br_sascore,
             self.config.max_clogp,
             self.lilly_filter,
+            self.ring_filter,
             self.protonation_filter,
         )
         diagnostics: list[StructureScore | None] = [None] * len(decoded)
@@ -646,6 +667,7 @@ class DockingObjectives(Objectives):
                     or reason.startswith("Pfizer 3/75 filter")
                     or reason.startswith("BR-SAScore")
                     or reason.startswith("Lilly Medchem Rules")
+                    or reason.startswith("Ring precedent filter")
                     or reason == "AMSR conformer construction failed"
                     or reason == "PoseBusters failed"
                 )
@@ -758,6 +780,11 @@ class BoxDockingObjectives(Objectives):
         self.lilly_filter = lilly_filter
         if config.lilly_medchem_rules and self.lilly_filter is None:
             self.lilly_filter = LillyMedchemFilter(config.lilly_rules_executable)
+        self.ring_filter = (
+            RingPrecedentFilter(config.ring_database, config.ring_python)
+            if config.ring_database is not None and config.ring_python is not None
+            else None
+        )
         self.protonation_filter = (
             ProtonationFilter(config.max_protonation_variants)
             if config.protonation_filter
@@ -775,6 +802,7 @@ class BoxDockingObjectives(Objectives):
             self.config.max_br_sascore,
             self.config.max_clogp,
             self.lilly_filter,
+            self.ring_filter,
             self.protonation_filter,
         )
         candidate_indices, candidates = _group_distinct_conformers_by_molecule(
