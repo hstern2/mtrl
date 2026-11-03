@@ -280,7 +280,9 @@ def score(
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
             ring_database=ring_database.resolve() if ring_database is not None else None,
-            ring_python=ring_python.resolve() if ring_python is not None else None,
+            # Preserve a virtual-environment symlink: resolving it would replace
+            # the environment's interpreter with the base Python executable.
+            ring_python=ring_python.absolute() if ring_python is not None else None,
             verbose_tools=verbose_tools,
             evaluation_workers=evaluation_workers,
             target_failure_score=target_failure_score,
@@ -909,7 +911,7 @@ def rl(
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
             ring_database=ring_database.resolve() if ring_database is not None else None,
-            ring_python=ring_python.resolve() if ring_python is not None else None,
+            ring_python=ring_python.absolute() if ring_python is not None else None,
             verbose_tools=verbose_tools,
             evaluation_workers=evaluation_workers,
             target_failure_score=target_failure_score,
@@ -948,7 +950,7 @@ def rl(
             lilly_medchem_rules=lilly_medchem_rules,
             lilly_rules_executable=lilly_rules_executable,
             ring_database=ring_database.resolve() if ring_database is not None else None,
-            ring_python=ring_python.resolve() if ring_python is not None else None,
+            ring_python=ring_python.absolute() if ring_python is not None else None,
             verbose_tools=verbose_tools,
             evaluation_workers=evaluation_workers,
         )

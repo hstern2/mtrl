@@ -275,10 +275,17 @@ def test_rl_resumes_available_training_state(tmp_path, monkeypatch) -> None:
 def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
     checkpoint = tmp_path / "policy.pt"
     receptor = tmp_path / "receptor.pdb"
+    ring_database = tmp_path / "rings.bdb"
+    ring_python_target = tmp_path / "python-real"
+    ring_python = tmp_path / "ring-python"
     targets = tmp_path / "targets.json"
     output = tmp_path / "output"
     checkpoint.touch()
     receptor.write_text("END\n")
+    ring_database.touch()
+    ring_python_target.write_text("#!/bin/sh\n")
+    ring_python_target.chmod(0o755)
+    ring_python.symlink_to(ring_python_target)
     targets.write_text(
         json.dumps(
             {
@@ -314,6 +321,10 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
             "5",
             "--max-clogp",
             "4",
+            "--ring-database",
+            str(ring_database),
+            "--ring-python",
+            str(ring_python),
             "--target-failure-score",
             "-1.5",
             "--accept-targets",
@@ -357,6 +368,8 @@ def test_rl_accepts_box_docking_target_manifest(tmp_path, monkeypatch) -> None:
     assert scoring_config["max_protonation_variants"] == 6
     assert scoring_config["max_br_sascore"] == 5.0
     assert scoring_config["max_clogp"] == 4.0
+    assert scoring_config["ring_database"] == str(ring_database.resolve())
+    assert scoring_config["ring_python"] == str(ring_python.absolute())
     assert scoring_config["target_failure_score"] == -1.5
     assert scoring_config["accept_targets"] == "all"
     assert scoring_config["unidock_executable"] == "/tools/unidock"
