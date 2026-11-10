@@ -5,6 +5,11 @@ token-sequence package [trl](https://github.com/hstern2/trl). `mtrl` owns AMSR
 decoding, conformer construction, molecular filters, structure scoring, and the
 molecular RL workflow.
 
+Scoring depends on the workflow. Reference-ligand RL uses GNINA
+`CNNaffinity` and Roshambo2 `tanimoto_combination`. Explicit-box docking and
+RL use GNINA `CNNaffinity` for each target and can also use AEV-PLIG predicted
+affinity for each target.
+
 ## Generate conformers
 
 Sample a pretrained checkpoint and decode the emitted AMSR geometry without
@@ -24,7 +29,7 @@ pass `--seed INTEGER` to reproduce a run. Each record stores that seed as
 `MTRL_SEED`. A stringent AMSR decode and successful conformer construction are
 the only requirements for inclusion.
 
-## Structure-scored RL
+## Reference-ligand structure-scored RL
 
 For each generated AMSR string, `mtrl`:
 
@@ -92,8 +97,10 @@ are removed after each molecule. External-tool chatter is hidden unless
 ## Explicit-box, multi-receptor docking and RL
 
 Docking without a reference ligand is configured with a JSON target manifest.
-Each receptor/box pair becomes one independently maximized `CNNaffinity`
-objective. Optional AEV-PLIG rescoring adds a second objective per target:
+Each receptor/box pair becomes one independently maximized GNINA
+`CNNaffinity` objective. Enabling AEV-PLIG adds a separate, independently
+maximized predicted-affinity objective per target. Box mode does not use
+Roshambo similarity. A target manifest looks like this:
 
 ```json
 {
@@ -130,6 +137,8 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl score molecules.sdf \
   --gnina-timeout-seconds 600 \
   --posebusters-timeout-seconds 600 \
   --posebusters-config dock-fast \
+  --aev-plig-dir /path/to/AEV-PLIG \
+  --aev-plig-python /path/to/aev-plig/bin/python \
   --rdkit-druglike-filter \
   --muegge-filter \
   --brenk-filter \
@@ -147,6 +156,8 @@ CUDA_VISIBLE_DEVICES=0 uv run mtrl rl /path/to/best.pt \
   --gnina-timeout-seconds 600 \
   --posebusters-timeout-seconds 600 \
   --posebusters-config dock-fast \
+  --aev-plig-dir /path/to/AEV-PLIG \
+  --aev-plig-python /path/to/aev-plig/bin/python \
   --rdkit-druglike-filter \
   --muegge-filter \
   --brenk-filter \
@@ -188,12 +199,15 @@ any predicted state in the range rather than selecting a dominant state at pH
 7.4. Repeated molecular structures are cached within each scoring process.
 
 To enable [AEV-PLIG](https://github.com/isakvals/AEV-PLIG), provide its checkout
-and Python environment to either `mtrl score` or box-mode `mtrl rl`:
+and Python environment to either `mtrl score` or box-mode `mtrl rl`, as shown
+above. When AEV-PLIG uses a separate Python environment, pass:
 
 ```bash
 --aev-plig-dir /path/to/AEV-PLIG \
 --aev-plig-python /path/to/aev-plig/bin/python
 ```
+
+Omit both options for CNNaffinity-only scoring.
 
 Every PoseBusters-passing GNINA-minimized pose is rescored in bounded batches.
 Explicit ligand hydrogens are restored without changing the
