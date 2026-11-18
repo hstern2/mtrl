@@ -16,14 +16,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from lad import busters, gnina, roshambo
-from lad.sdf import extract_scores, extract_tanimoto_combination, read_mol
 from rdkit import Chem, log_handler, rdBase
 from rdkit.Chem import Mol, rdMolAlign
 
-from mtrl import DecodedAMSR, make_conformer
+from mtrl import DecodedAMSR, busters, gnina, make_conformer, roshambo
 from mtrl.aev_plig import AEVPligInput, AEVPligScorer
 from mtrl.config import BoxScoringConfig, DockingTarget, ScoringConfig
+from mtrl.sdf import extract_scores, extract_tanimoto_combination, read_mol
 
 
 @dataclass(frozen=True)

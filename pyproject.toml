@@ -15,7 +15,7 @@ dependencies = [
     "torch>=2.4,<3",
     "trl @ git+https://github.com/hstern2/trl.git@d18b791df5824db2bbcb9ab1e044c6eba2179b53",
     "amsr @ git+https://github.com/hstern2/amsr.git@86fd7004947946012efd907496038327477c8ce6",
-    "lad @ git+https://github.com/OrogenTX/lad.git@e15343efcdddf9a9b7fb3e025cf30ea3df1a7a23 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "posebusters>=0.6,<0.7 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "rdkit",
     "matplotlib>=3.8",
     "typer>=0.9",
@@ -25,6 +25,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+reference = [
+    "roshambo2 @ git+https://github.com/hstern2/roshambo2.git@77c5a11a07227631026484564a53947d08b966a0 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
 dev = [
     "pytest>=8",
     "pytest-cov>=5",

@@ -6,6 +6,7 @@ import pytest
 from rdkit import Chem, log_handler
 from rdkit.Chem import AllChem
 
+from mtrl import gnina
 from mtrl.config import ScoringConfig
 from mtrl.scoring import StructureScoringPipeline, _quiet_tools, minimized_pose_rmsd
 
@@ -35,6 +36,30 @@ def test_minimized_pose_rmsd_is_in_place_and_heavy_atom_only() -> None:
     aligned = _mol3d()
     moved = _translate(aligned, 0.75)
     assert minimized_pose_rmsd(aligned, moved) == pytest.approx(0.75, abs=1e-6)
+
+
+def test_reference_gnina_command_uses_expected_output(tmp_path) -> None:
+    receptor = tmp_path / "receptor.pdb"
+    ligand = tmp_path / "ligand.sdf"
+    reference = tmp_path / "reference.sdf"
+    command = gnina.cmd(receptor, ligand, reference, minimize=True)
+
+    assert command == [
+        "gnina",
+        "--minimize",
+        "-r",
+        str(receptor),
+        "-l",
+        str(ligand),
+        "--autobox_ligand",
+        str(reference),
+        "--autobox_extend",
+        "1",
+        "--num_modes",
+        "1",
+        "-o",
+        str(ligand.with_suffix(".gnina.sdf")),
+    ]
 
 
 def test_quiet_tools_restores_rdkit_log_stream() -> None:

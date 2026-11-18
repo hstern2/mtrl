@@ -60,6 +60,15 @@ be outside `PATH` when supplied with `--unidock-executable`.
 uv sync
 ```
 
+The reference-ligand workflow additionally requires Roshambo2:
+
+```bash
+uv sync --extra reference
+```
+
+Explicit-box Uni-Dock/GNINA scoring does not use Roshambo2 or require the
+`reference` extra.
+
 ### Run
 
 Start from the final pretrained `best.pt` checkpoint:
